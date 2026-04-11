@@ -30,7 +30,10 @@ env/
 Thumbs.db
 
 # Data (large files)
-data/
+data/benchmark/
+data/raw/
+data/processed/
+data/synthetic
 
 # LaTeX build artifacts
 report/*.aux

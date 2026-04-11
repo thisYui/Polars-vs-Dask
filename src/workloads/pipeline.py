@@ -1,0 +1,83 @@
+"""
+src/workloads/pipeline.py
+Workload 4: Complex multi-step pipeline.
+  filter → groupby → join → sort
+Simulates a realistic analytics query.
+"""
+
+from pathlib import Path
+
+from src.core.config import (
+    FILTER_RATING_THRESHOLD, GROUPBY_COLUMN,
+    PRODUCT_METADATA_PATH, POLARS_STREAMING,
+)
+
+
+def _ensure_metadata() -> Path:
+    if not PRODUCT_METADATA_PATH.exists():
+        from src.data.data_generator import generate_product_metadata
+        generate_product_metadata()
+    return PRODUCT_METADATA_PATH
+
+
+def pandas_pipeline(path: Path) -> "pd.DataFrame":
+    import pandas as pd
+    meta    = pd.read_parquet(_ensure_metadata(), columns=["product_id", "price", "brand"])
+    df      = pd.read_parquet(path)
+    return (
+        df[df["rating"] >= FILTER_RATING_THRESHOLD]
+        .groupby(GROUPBY_COLUMN)["rating"]
+        .agg(["mean", "count", "sum"])
+        .reset_index()
+        .merge(meta, on="product_id", how="left")
+        .sort_values("count", ascending=False)
+    )
+
+
+def polars_pipeline(path: Path, lazy: bool = True) -> "pl.DataFrame":
+    import polars as pl
+    meta_path = _ensure_metadata()
+    aggs = [
+        pl.col("rating").mean().alias("rating_mean"),
+        pl.col("rating").count().alias("rating_count"),
+        pl.col("rating").sum().alias("rating_sum"),
+    ]
+    if lazy:
+        meta = pl.scan_parquet(meta_path).select(["product_id", "price", "brand"])
+        return (
+            pl.scan_parquet(path)
+            .filter(pl.col("rating") >= FILTER_RATING_THRESHOLD)
+            .group_by(GROUPBY_COLUMN)
+            .agg(aggs)
+            .join(meta, on="product_id", how="left")
+            .sort("rating_count", descending=True)
+            .collect(streaming=POLARS_STREAMING)
+        )
+    meta = pl.read_parquet(meta_path).select(["product_id", "price", "brand"])
+    return (
+        pl.read_parquet(path)
+        .filter(pl.col("rating") >= FILTER_RATING_THRESHOLD)
+        .group_by(GROUPBY_COLUMN)
+        .agg(aggs)
+        .join(meta, on="product_id", how="left")
+        .sort("rating_count", descending=True)
+    )
+
+
+def dask_pipeline(path: Path) -> "pd.DataFrame":
+    import dask.dataframe as dd
+    import pandas as pd
+    meta    = pd.read_parquet(_ensure_metadata(), columns=["product_id", "price", "brand"])
+    reviews = dd.read_parquet(path)
+    grouped = (
+        reviews[reviews["rating"] >= FILTER_RATING_THRESHOLD]
+        .groupby(GROUPBY_COLUMN)["rating"]
+        .agg(["mean", "count", "sum"])
+        .reset_index()
+        .compute()
+    )
+    return (
+        grouped
+        .merge(meta, on="product_id", how="left")
+        .sort_values("count", ascending=False)
+    )

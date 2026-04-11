@@ -1,45 +1,44 @@
 """
-utils.py
-Shared utilities: logging setup, result persistence, timing helpers.
+src/utils.py
+Shared helpers: logging, result I/O, path resolution, system info.
 """
 
 import csv
 import json
 import logging
-import time
-from contextlib import contextmanager
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from config import LOG_LEVEL, LOG_FILE, TABLES_DIR, RAW_RESULTS_DIR
+from core.config import (
+    LOG_LEVEL, LOG_FILE,
+    RAW_RESULTS_DIR, TABLES_DIR,
+    BENCHMARK_DIR, SYNTHETIC_DIR,
+    BENCHMARK_SIZES,
+)
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 # Logging
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a configured logger writing to file + console."""
     logger = logging.getLogger(name)
     if logger.handlers:
-        return logger  # already configured
+        return logger
 
     logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
-
     fmt = logging.Formatter(
         "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
-    # Console handler
-    ch = logging.StreamHandler()
+    ch = logging.StreamHandler(sys.stdout)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    # File handler
     fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
     fh.setFormatter(fmt)
     logger.addHandler(fh)
@@ -47,89 +46,63 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
-# ─────────────────────────────────────────────
-# Timing
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
+# Path helpers
+# ─────────────────────────────────────────────────────────
 
-@contextmanager
-def timer(label: str = ""):
+def get_dataset_path(size_label: str, fmt: str = "parquet") -> Path:
     """
-    Context manager that measures wall-clock time.
-
-    Usage:
-        with timer("my operation") as t:
-            do_something()
-        print(t.elapsed)
+    Return the benchmark-ready dataset path for a given size label.
+    E.g. "1M" → data/benchmark/reviews_1M.parquet
     """
-    class _Timer:
-        elapsed: float = 0.0
-
-    t = _Timer()
-    start = time.perf_counter()
-    try:
-        yield t
-    finally:
-        t.elapsed = time.perf_counter() - start
-        if label:
-            get_logger("timer").debug(f"{label}: {t.elapsed:.4f}s")
+    return BENCHMARK_DIR / f"reviews_{size_label}.{fmt}"
 
 
-def format_duration(seconds: float) -> str:
-    """Human-readable duration string."""
-    if seconds < 60:
-        return f"{seconds:.2f}s"
-    m, s = divmod(seconds, 60)
-    return f"{int(m)}m {s:.1f}s"
+def get_synthetic_path(size_label: str, fmt: str = "parquet") -> Path:
+    return SYNTHETIC_DIR / f"reviews_{size_label}.{fmt}"
 
 
-# ─────────────────────────────────────────────
-# Result Persistence
-# ─────────────────────────────────────────────
+def get_file_size_mb(path: Path) -> float:
+    return path.stat().st_size / 1024**2 if path.exists() else 0.0
+
+
+# ─────────────────────────────────────────────────────────
+# Result persistence
+# ─────────────────────────────────────────────────────────
+
+_RESULT_FIELDS = [
+    "timestamp", "framework", "workload", "dataset_size",
+    "n_rows", "run_index", "time_s", "peak_memory_mb",
+    "throughput_rows_per_s", "status", "notes",
+]
+
 
 def save_result(record: dict[str, Any], filename: str = "benchmark_results.csv") -> Path:
-    """
-    Append a single benchmark record to the master CSV results file.
-
-    Args:
-        record: Dict with keys like framework, workload, size, time_s, memory_mb, etc.
-        filename: Target CSV filename inside results/raw/
-
-    Returns:
-        Path to the CSV file.
-    """
+    """Append one benchmark record to a CSV file in results/raw/."""
+    record = dict(record)
     record["timestamp"] = datetime.now().isoformat(timespec="seconds")
-    path = RAW_RESULTS_DIR / filename
-
-    fieldnames = [
-        "timestamp", "framework", "workload", "dataset_size",
-        "n_rows", "run_index", "time_s", "peak_memory_mb",
-        "throughput_rows_per_s", "status", "notes",
-    ]
-    # Fill missing keys with None
-    for k in fieldnames:
+    for k in _RESULT_FIELDS:
         record.setdefault(k, None)
 
+    path = RAW_RESULTS_DIR / filename
     write_header = not path.exists()
+
     with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=_RESULT_FIELDS, extrasaction="ignore")
         if write_header:
-            writer.writeheader()
-        writer.writerow(record)
+            w.writeheader()
+        w.writerow(record)
 
     return path
 
 
 def load_results(filename: str = "benchmark_results.csv") -> pd.DataFrame:
-    """Load all saved benchmark results into a DataFrame."""
     path = RAW_RESULTS_DIR / filename
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_csv(path)
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
 def save_summary_table(df: pd.DataFrame, name: str) -> Path:
-    """Save a summary pivot table as both CSV and JSON."""
-    csv_path = TABLES_DIR / f"{name}.csv"
+    csv_path  = TABLES_DIR / f"{name}.csv"
     json_path = TABLES_DIR / f"{name}.json"
     df.to_csv(csv_path, index=True)
     df.to_json(json_path, orient="table", indent=2)
@@ -137,87 +110,58 @@ def save_summary_table(df: pd.DataFrame, name: str) -> Path:
 
 
 def build_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate raw results into a summary table.
-    Groups by framework + workload + dataset_size, averages timed runs.
-    """
     if df.empty:
         return df
-    numeric_cols = ["time_s", "peak_memory_mb", "throughput_rows_per_s"]
-    available = [c for c in numeric_cols if c in df.columns]
+    numeric = [c for c in ["time_s", "peak_memory_mb", "throughput_rows_per_s"]
+               if c in df.columns]
     summary = (
         df[df["status"] == "ok"]
-        .groupby(["framework", "workload", "dataset_size", "n_rows"])[available]
+        .groupby(["framework", "workload", "dataset_size", "n_rows"])[numeric]
         .agg(["mean", "std", "min", "max"])
     )
     summary.columns = ["_".join(c) for c in summary.columns]
     return summary.reset_index()
 
 
-# ─────────────────────────────────────────────
-# System Info
-# ─────────────────────────────────────────────
+def merge_result_files(*filenames: str, output: str = "all_results.csv") -> pd.DataFrame:
+    """Concatenate multiple per-framework result CSVs into one master file."""
+    frames = [load_results(f) for f in filenames if load_results(f).shape[0] > 0]
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True)
+    merged.to_csv(RAW_RESULTS_DIR / output, index=False)
+    return merged
+
+
+# ─────────────────────────────────────────────────────────
+# System info
+# ─────────────────────────────────────────────────────────
 
 def get_system_info() -> dict[str, Any]:
-    """Collect basic system metadata for reproducibility."""
     import platform
     import psutil
 
-    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
-
     info = {
-        "os": platform.system(),
-        "os_version": platform.version(),
-        "python_version": platform.python_version(),
-        "cpu_count_logical": psutil.cpu_count(logical=True),
-        "cpu_count_physical": psutil.cpu_count(logical=False),
-        "ram_total_gb": round(ram_gb, 2),
+        "os":               platform.system(),
+        "python_version":   platform.python_version(),
+        "cpu_logical":      psutil.cpu_count(logical=True),
+        "cpu_physical":     psutil.cpu_count(logical=False),
+        "ram_total_gb":     round(psutil.virtual_memory().total / 1024**3, 2),
     }
-
-    try:
-        import pandas
-        info["pandas_version"] = pandas.__version__
-    except ImportError:
-        pass
-    try:
-        import polars
-        info["polars_version"] = polars.__version__
-    except ImportError:
-        pass
-    try:
-        import dask
-        info["dask_version"] = dask.__version__
-    except ImportError:
-        pass
-
+    for pkg in ("pandas", "polars", "dask", "pyarrow", "numpy"):
+        try:
+            mod = __import__(pkg)
+            info[f"{pkg}_version"] = mod.__version__
+        except ImportError:
+            pass
     return info
 
 
 def print_system_info() -> None:
     info = get_system_info()
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 52)
     print("  SYSTEM INFO")
-    print("=" * 50)
+    print("=" * 52)
     for k, v in info.items():
-        print(f"  {k:<30} {v}")
-    print("=" * 50 + "\n")
-
-
-# ─────────────────────────────────────────────
-# File Helpers
-# ─────────────────────────────────────────────
-
-def get_dataset_path(size_label: str, fmt: str = "parquet") -> Path:
-    """Return the expected path for a synthetic dataset of a given size."""
-    from config import SYNTHETIC_DIR
-    return SYNTHETIC_DIR / f"reviews_{size_label}.{fmt}"
-
-
-def get_file_size_mb(path: Path) -> float:
-    """Return file size in MB."""
-    return path.stat().st_size / (1024 ** 2) if path.exists() else 0.0
-
-
-def ensure_dir(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+        print(f"  {k:<28} {v}")
+    print("=" * 52 + "\n")
