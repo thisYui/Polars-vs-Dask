@@ -47,3 +47,6 @@ report/*.lof
 report/*.synctex.gz
 report/*.fdb_latexmk
 report/*.fls
+
+
+logs/

@@ -1,0 +1,13 @@
+timestamp,framework,workload,dataset_size,n_rows,run_index,time_s,peak_memory_mb,throughput_rows_per_s,status,notes
+2026-04-12T01:58:45,polars_eager,filter,1M,1000000,1,0.1248,335.06,8014940,ok,
+2026-04-12T01:58:45,polars_eager,filter,1M,1000000,2,0.1295,323.67,7719385,ok,
+2026-04-12T01:58:45,polars_eager,filter,1M,1000000,3,0.1386,348.87,7213592,ok,
+2026-04-12T01:58:45,polars_eager,groupby,1M,1000000,1,0.1647,405.74,6072803,ok,
+2026-04-12T01:58:45,polars_eager,groupby,1M,1000000,2,0.1511,373.28,6616654,ok,
+2026-04-12T01:58:46,polars_eager,groupby,1M,1000000,3,0.1428,367.74,7004685,ok,
+2026-04-12T01:58:46,polars_eager,join,1M,1000000,1,0.1612,383.95,6203039,ok,
+2026-04-12T01:58:46,polars_eager,join,1M,1000000,2,0.1546,394.96,6467569,ok,
+2026-04-12T01:58:46,polars_eager,join,1M,1000000,3,0.2074,394.79,4822138,ok,
+2026-04-12T01:58:47,polars_eager,pipeline,1M,1000000,1,0.4072,385.75,2455862,ok,
+2026-04-12T01:58:48,polars_eager,pipeline,1M,1000000,2,0.4002,350.68,2498594,ok,
+2026-04-12T01:58:48,polars_eager,pipeline,1M,1000000,3,0.286,418.0,3495974,ok,

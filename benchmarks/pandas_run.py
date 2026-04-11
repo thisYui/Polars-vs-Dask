@@ -73,7 +73,7 @@ def main(
 
 
 if __name__ == "__main__":
-    from core.config import SCALABILITY_SIZES
+    from src.core.config import SCALABILITY_SIZES
     all_sizes = list({**BENCHMARK_SIZES, **SCALABILITY_SIZES}.keys())
 
     parser = argparse.ArgumentParser(description="Pandas benchmark runner")

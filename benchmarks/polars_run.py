@@ -50,7 +50,7 @@ def main(
     logger.info(f"runs={warmup} warmup + {n_runs} timed")
     logger.info("=" * 58)
 
-    from core.config import SCALABILITY_SIZES
+    from src.core.config import SCALABILITY_SIZES
     all_size_map = {**BENCHMARK_SIZES, **SCALABILITY_SIZES}
 
     t0 = time.perf_counter()

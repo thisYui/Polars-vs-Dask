@@ -9,6 +9,15 @@ from pathlib import Path
 from src.core.config import PRODUCT_METADATA_PATH, POLARS_STREAMING
 
 
+def _read_parquet(path: Path) -> "pd.DataFrame":
+    """Đọc cả single file lẫn partition folder."""
+    import pandas as pd
+    if path.is_dir():
+        files = sorted(path.glob("part-*.parquet"))
+        return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    return pd.read_parquet(path)
+
+
 def _ensure_metadata() -> Path:
     if not PRODUCT_METADATA_PATH.exists():
         from src.data.data_generator import generate_product_metadata
@@ -19,7 +28,7 @@ def _ensure_metadata() -> Path:
 def pandas_join(path: Path) -> "pd.DataFrame":
     import pandas as pd
     meta    = pd.read_parquet(_ensure_metadata())
-    reviews = pd.read_parquet(path)
+    reviews = _read_parquet(path)
     result  = reviews.merge(meta, on="product_id", how="left")
     _       = len(result)
     return result

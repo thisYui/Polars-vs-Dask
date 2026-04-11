@@ -13,11 +13,10 @@ from typing import Any
 
 import pandas as pd
 
-from core.config import (
+from src.core.config import (
     LOG_LEVEL, LOG_FILE,
     RAW_RESULTS_DIR, TABLES_DIR,
     BENCHMARK_DIR, SYNTHETIC_DIR,
-    BENCHMARK_SIZES,
 )
 
 
@@ -51,10 +50,11 @@ def get_logger(name: str) -> logging.Logger:
 # ─────────────────────────────────────────────────────────
 
 def get_dataset_path(size_label: str, fmt: str = "parquet") -> Path:
-    """
-    Return the benchmark-ready dataset path for a given size label.
-    E.g. "1M" → data/benchmark/reviews_1M.parquet
-    """
+    # Ưu tiên folder partition (dành cho 20M+)
+    folder = BENCHMARK_DIR / size_label
+    if folder.exists() and any(folder.glob("part-*.parquet")):
+        return folder
+    # Fallback single file
     return BENCHMARK_DIR / f"reviews_{size_label}.{fmt}"
 
 

@@ -12,6 +12,14 @@ from src.core.config import (
     PRODUCT_METADATA_PATH, POLARS_STREAMING,
 )
 
+def _read_parquet(path: Path) -> "pd.DataFrame":
+    """Đọc cả single file lẫn partition folder."""
+    import pandas as pd
+    if path.is_dir():
+        files = sorted(path.glob("part-*.parquet"))
+        return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    return pd.read_parquet(path)
+
 
 def _ensure_metadata() -> Path:
     if not PRODUCT_METADATA_PATH.exists():
@@ -23,7 +31,7 @@ def _ensure_metadata() -> Path:
 def pandas_pipeline(path: Path) -> "pd.DataFrame":
     import pandas as pd
     meta    = pd.read_parquet(_ensure_metadata(), columns=["product_id", "price", "brand"])
-    df      = pd.read_parquet(path)
+    df      = _read_parquet(path)
     return (
         df[df["rating"] >= FILTER_RATING_THRESHOLD]
         .groupby(GROUPBY_COLUMN)["rating"]

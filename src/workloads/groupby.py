@@ -9,9 +9,18 @@ from pathlib import Path
 from src.core.config import GROUPBY_COLUMN, POLARS_STREAMING
 
 
+def _read_parquet(path: Path) -> "pd.DataFrame":
+    """Đọc cả single file lẫn partition folder."""
+    import pandas as pd
+    if path.is_dir():
+        files = sorted(path.glob("part-*.parquet"))
+        return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    return pd.read_parquet(path)
+
+
 def pandas_groupby(path: Path) -> "pd.DataFrame":
     import pandas as pd
-    df = pd.read_parquet(path)
+    df = _read_parquet(path)
     return (
         df.groupby(GROUPBY_COLUMN)["rating"]
         .agg(["mean", "count", "sum"])

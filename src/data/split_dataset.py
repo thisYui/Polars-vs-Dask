@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import gc
+import math
 import sys
 from pathlib import Path
 
@@ -211,6 +212,111 @@ def prepare_benchmark_splits(
     return split_from_synthetic(sizes, force=force)
 
 
+def split_to_partitions(
+        source: Path,
+        size_label: str,
+        n_rows: int,
+        dest: Path = BENCHMARK_DIR,
+        target_file_mb: int = 512,  # mỗi file ~512MB
+        force: bool = False,
+) -> Path:
+    """
+    Split source thành nhiều parquet files nhỏ.
+    Trả về folder path (Dask/Polars đọc cả folder).
+
+    Dask dùng: dd.read_parquet("data/benchmark/20M/")
+    Polars dùng: pl.scan_parquet("data/benchmark/20M/*.parquet")
+    """
+    out_dir = dest / size_label
+
+    # Kiểm tra đã tồn tại chưa
+    existing = list(out_dir.glob("part-*.parquet"))
+    if existing and not force:
+        total_existing = sum(p.stat().st_size for p in existing) / 1024 ** 2
+        logger.info(
+            f"Partition '{size_label}' already exists "
+            f"({len(existing)} files, {total_existing:.0f} MB) — skip"
+        )
+        return out_dir
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ước tính bytes/row từ source để tính n_rows/partition
+    source_mb = source.stat().st_size / 1024 ** 2
+    source_rows = _count_parquet_rows(source)
+    bytes_per_row = (source_mb * 1024 ** 2) / source_rows
+    rows_per_partition = max(
+        100_000,
+        int((target_file_mb * 1024 ** 2) / bytes_per_row)
+    )
+    n_partitions = math.ceil(n_rows / rows_per_partition)
+
+    logger.info(
+        f"Splitting '{size_label}': {n_rows:,} rows → "
+        f"{n_partitions} files × ~{rows_per_partition:,} rows "
+        f"(~{target_file_mb} MB each)"
+    )
+
+    pf = pq.ParquetFile(source)
+    writers = {}
+    written = 0
+    part_idx = 0
+    part_written = 0
+    writer = None
+    schema = None
+
+    try:
+        for batch in pf.iter_batches(batch_size=200_000):
+            if written >= n_rows:
+                break
+
+            table = pa.Table.from_batches([batch])
+            if schema is None:
+                schema = table.schema
+
+            remaining_total = n_rows - written
+            chunk = table.slice(0, min(len(table), remaining_total))
+
+            offset = 0
+            while offset < len(chunk):
+                # Mở writer mới nếu cần
+                if writer is None:
+                    part_path = out_dir / f"part-{part_idx:03d}.parquet"
+                    writer = pq.ParquetWriter(part_path, schema, compression="snappy")
+                    part_written = 0
+
+                # Tính số rows còn có thể ghi vào partition này
+                space_left = rows_per_partition - part_written
+                take = min(space_left, len(chunk) - offset)
+
+                writer.write_table(chunk.slice(offset, take))
+                part_written += take
+                written += take
+                offset += take
+
+                # Đóng partition nếu đầy
+                if part_written >= rows_per_partition:
+                    writer.close()
+                    part_path = out_dir / f"part-{part_idx:03d}.parquet"
+                    size_mb = part_path.stat().st_size / 1024 ** 2
+                    logger.info(f"  ✓ part-{part_idx:03d}.parquet | {part_written:,} rows | {size_mb:.0f} MB")
+                    writer = None
+                    part_idx += 1
+
+            del table, chunk
+            gc.collect()
+
+    finally:
+        if writer:
+            writer.close()
+            part_path = out_dir / f"part-{part_idx:03d}.parquet"
+            size_mb = part_path.stat().st_size / 1024 ** 2
+            logger.info(f"  ✓ part-{part_idx:03d}.parquet | {part_written:,} rows | {size_mb:.0f} MB")
+
+    total_mb = sum(p.stat().st_size for p in out_dir.glob("part-*.parquet")) / 1024 ** 2
+    logger.info(f"\nDone: {out_dir} | {written:,} rows | {total_mb:.0f} MB total")
+    return out_dir
+
 # ─────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────
@@ -238,4 +344,4 @@ if __name__ == "__main__":
     )
     print(f"\nReady splits ({len(results)}):")
     for label, path in sorted(results.items()):
-        print(f"  {label:<8} {get_file_size_mb(path):.1f} MB  →  {path}")
+        print(f"  {label:<8} {get_file_size_mb(path):.1f} MB  ->  {path}")
