@@ -16,7 +16,8 @@ import pandas as pd
 from src.core.config import (
     LOG_LEVEL, LOG_FILE,
     RAW_RESULTS_DIR, TABLES_DIR,
-    BENCHMARK_DIR, SYNTHETIC_DIR,
+    BENCHMARK_REAL_DIR, BENCHMARK_SYN_DIR,
+    SYNTHETIC_DIR,
 )
 
 
@@ -49,13 +50,16 @@ def get_logger(name: str) -> logging.Logger:
 # Path helpers
 # ─────────────────────────────────────────────────────────
 
-def get_dataset_path(size_label: str, fmt: str = "parquet") -> Path:
-    # Ưu tiên folder partition (dành cho 20M+)
-    folder = BENCHMARK_DIR / size_label
+def get_dataset_path(
+    size_label: str,
+    fmt: str = "parquet",
+    data_type: str = "real",   # "real" | "syn"
+) -> Path:
+    base = BENCHMARK_REAL_DIR if data_type == "real" else BENCHMARK_SYN_DIR
+    folder = base / size_label
     if folder.exists() and any(folder.glob("part-*.parquet")):
         return folder
-    # Fallback single file
-    return BENCHMARK_DIR / f"reviews_{size_label}.{fmt}"
+    return base / f"reviews_{size_label}.{fmt}"
 
 
 def get_synthetic_path(size_label: str, fmt: str = "parquet") -> Path:

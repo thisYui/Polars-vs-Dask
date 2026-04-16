@@ -36,6 +36,7 @@ def main(
     warmup:       int = WARMUP_RUNS,
     results_file: str = "polars_results.csv",
     file_format:  str = "parquet",
+    data_type: str = "real",
 ) -> None:
     import polars as pl
 
@@ -57,7 +58,7 @@ def main(
 
     for size_label in sizes:
         n_rows = all_size_map.get(size_label)
-        path   = get_dataset_path(size_label, file_format)
+        path = get_dataset_path(size_label, file_format, data_type)
 
         if not path.exists():
             logger.warning(f"Dataset '{size_label}' not found — skip")
@@ -89,6 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("--runs",      type=int, default=BENCHMARK_RUNS)
     parser.add_argument("--format",    choices=["parquet", "csv"],        default="parquet")
     parser.add_argument("--output",    default="polars_results.csv")
+    parser.add_argument("--data-type", choices=["real", "syn"], default="real")
     args = parser.parse_args()
 
     main(
@@ -98,4 +100,5 @@ if __name__ == "__main__":
         n_runs=args.runs,
         results_file=args.output,
         file_format=args.format,
+        data_type=args.data_type,
     )

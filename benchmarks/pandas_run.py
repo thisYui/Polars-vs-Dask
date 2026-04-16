@@ -36,6 +36,7 @@ def main(
     warmup:       int = WARMUP_RUNS,
     results_file: str = "pandas_results.csv",
     file_format:  str = "parquet",
+    data_type: str = "real",
 ) -> None:
     import pandas as pd
 
@@ -52,7 +53,7 @@ def main(
         n_rows = BENCHMARK_SIZES.get(size_label) or __import__(
             "core.config", fromlist=["SCALABILITY_SIZES"]
         ).SCALABILITY_SIZES.get(size_label)
-        path   = get_dataset_path(size_label, file_format)
+        path = get_dataset_path(size_label, file_format, data_type)
 
         if not path.exists():
             logger.warning(f"Dataset '{size_label}' not found at {path} — skip")
@@ -83,6 +84,7 @@ if __name__ == "__main__":
     parser.add_argument("--format",    choices=["parquet", "csv"],        default="parquet")
     parser.add_argument("--output",    default="pandas_results.csv")
     parser.add_argument("--sysinfo",   action="store_true")
+    parser.add_argument("--data-type", choices=["real", "syn"], default="real")
     args = parser.parse_args()
 
     if args.sysinfo:
@@ -94,4 +96,5 @@ if __name__ == "__main__":
         n_runs=args.runs,
         results_file=args.output,
         file_format=args.format,
+        data_type=args.data_type,
     )

@@ -7,14 +7,13 @@ graceful OOM/timeout/error capture, and result persistence.
 """
 
 import gc
-import sys
 import time
 import traceback
 from pathlib import Path
 from typing import Callable
 
 from src.core.config import (
-    BENCHMARK_RUNS, TIMEOUT_SECONDS, WARMUP_RUNS,
+    BENCHMARK_RUNS, WARMUP_RUNS,
     WORKLOADS, FRAMEWORKS, BENCHMARK_SIZES,
 )
 from src.core.timer import format_duration

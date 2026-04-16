@@ -2,31 +2,46 @@
 run_pipeline.py
 Master pipeline runner — chạy toàn bộ project từ đầu đến cuối.
 
+Available steps:
+    download            Download Amazon Reviews từ Hugging Face (stream, dừng sớm theo --sizes)
+    compress            Nén .jsonl → .jsonl.gz trong data/raw/ rồi xóa file gốc
+    preprocess          Đọc .jsonl.gz → clean → lưu Parquet (single-file hoặc partitioned)
+    split_real          Cắt processed parquet → benchmark splits (1M/10M/...)
+    generate_synthetic  Tạo synthetic data bằng numpy (không cần internet)
+    split_synthetic     Cắt synthetic data → benchmark splits
+    benchmark_pandas    Chạy benchmark Pandas
+    benchmark_polars    Chạy benchmark Polars (lazy)
+    benchmark_polars_eager  Chạy benchmark Polars (eager)
+    benchmark_dask      Chạy benchmark Dask
+    benchmark_all       Chạy toàn bộ benchmark matrix
+
 Usage:
-    python run_pipeline.py                          # chạy full pipeline
-    python run_pipeline.py --sizes 1M 10M 20M      # custom sizes
-    python run_pipeline.py --skip-download         # bỏ qua download (đã có data)
-    python run_pipeline.py --dry-run               # xem lệnh sẽ chạy, không thực thi
-    python run_pipeline.py --resume                # bỏ qua bước đã thành công
-    python run_pipeline.py --sysinfo               # in system info và thoát
-
-    # Steps test
-    cd script
     python run_pipeline.py --sysinfo
-    python run_pipeline.py --dry-run --skip-download --sizes 1M
-    python run_pipeline.py --skip-download --sizes 1M --groups data
-    python run_pipeline.py --skip-download --sizes 1M --groups benchmark
+    python run_pipeline.py --dry-run --sizes 1M
+    python run_pipeline.py --resume
+    python run_pipeline.py --clear-resume
 
-    #  DOWNLOAD + PREPARE REAL DATA
-    cd scripts
-    python run_pipeline.py --steps download preprocess split_real --sizes 1M 10M 20M
+    # Real data
+    python run_pipeline.py --steps download preprocess split_real --sizes 1M 10M
+    python run_pipeline.py --steps compress preprocess split_real --sizes 1M 10M 50M --partition
 
-    # RUN BENCHMARK
-    python run_pipeline.py --groups benchmark --sizes 1M 10M 20M
+    # Synthetic
+    python run_pipeline.py --steps generate_synthetic --sizes 1M 10M
+    python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M 100M
 
-    # BENCHMARK WITH PARTITION
-    python run_pipeline.py --groups benchmark --sizes 1M 10M 20M --partition
+    # RAM-targeted synthetic (recommended)
+    python run_pipeline.py --steps generate_synthetic --target-ram-gb 0.3
+    python run_pipeline.py --steps generate_synthetic split_synthetic --target-ram-gb 5 10 20
 
+    # Benchmark
+    python run_pipeline.py --groups benchmark --sizes 1M 10M
+    python run_pipeline.py --steps benchmark_pandas --sizes 1M 10M
+
+# Main
+    python run_pipeline.py --steps compress --partition --verbose
+    python run_pipeline.py --steps preprocess --partition --verbose
+    python run_pipeline.py --steps split_real --sizes 1M 10M 50M --data-type real --partition --verbose
+    python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M --data-type syn --partition --verbose
 """
 
 import argparse
@@ -51,9 +66,9 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 RESUME_FILE = ROOT / "logs" / "pipeline_resume.json"
 LOG_FILE    = LOG_DIR / f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
-# PYTHONPATH cho tất cả subprocess — để src.* import được
 _ENV = os.environ.copy()
 _ENV["PYTHONPATH"] = str(ROOT)
+
 
 # ─────────────────────────────────────────────────────────
 # Logging setup
@@ -78,6 +93,7 @@ def _setup_logger() -> logging.Logger:
 
 logger = _setup_logger()
 
+
 # ─────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────
@@ -90,6 +106,10 @@ def _fmt(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m}m {s:02d}s"
 
+def _has_jsonl_files(raw_dir: Path) -> bool:
+    return any(raw_dir.glob("*.jsonl"))
+
+
 # ─────────────────────────────────────────────────────────
 # Pipeline step definitions
 # ─────────────────────────────────────────────────────────
@@ -97,80 +117,163 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
     sizes_flag      = args.sizes
     frameworks_flag = args.frameworks
     source_flag     = args.data_source
-    split_extra     = ["--partition"] if args.partition else []
+    raw_format_flag = args.raw_format
     benchmark_extra = ["--generate-data"] if args.generate_data else []
+    data_type_flag  = getattr(args, "data_type", "real")
+
+    preprocess_extra = ["--partition"] if args.partition else []
+    split_extra      = ["--partition"] if args.partition else []
+
+    raw_format_extra = (
+        ["--raw-format", raw_format_flag] if raw_format_flag != "auto" else []
+    )
+
+    _SIZE_MAP = {
+        "1M": 1_000_000, "5M": 5_000_000, "10M": 10_000_000,
+        "50M": 50_000_000, "100M": 100_000_000,
+    }
+    _max_needed   = max(_SIZE_MAP.get(s, 0) for s in sizes_flag)
+    _download_cap = int(_max_needed * 1.2)
+
+    if args.small_download:
+        _dl_flag = ["--small"]
+    elif args.amazon_categories:
+        _dl_flag = ["--category"] + args.amazon_categories
+    elif _max_needed <= 2_000_000:
+        _dl_flag = ["--small"]
+    elif _max_needed <= 20_000_000:
+        _dl_flag = ["--category",
+                    "Home_and_Kitchen", "Sports_and_Outdoors", "Automotive",
+                    "Health_and_Household", "Toys_and_Games", "Office_Products"]
+    else:
+        _dl_flag = ["--category",
+                    "Books", "Electronics", "Clothing_Shoes_and_Jewelry",
+                    "Home_and_Kitchen", "Sports_and_Outdoors", "Automotive",
+                    "Health_and_Household", "Movies_and_TV", "Toys_and_Games"]
+
+    _compress_workers = min(2, len(list((ROOT / "data" / "raw").glob("*.jsonl"))) or 2)
+    _target_mb_extra  = ["--target-file-mb", str(args.target_file_mb)]
+
+    # ── FIX #1: --force and --target-ram-gb both propagated to data_generator ──
+    gen_force_flag = ["--force"] if args.force else []
+
+    if args.target_ram_gb:
+        gen_cmd = _python("src/data/data_generator.py") + [
+            "--target-ram-gb", *map(str, args.target_ram_gb),
+        ] + gen_force_flag                          # FIX #1: was missing --force
+    else:
+        gen_cmd = _python("src/data/data_generator.py") + [
+            "--sizes", *sizes_flag,
+        ] + gen_force_flag
+
+    # ── FIX #2: split_synthetic skipped only when target_ram_gb AND no sizes ──
+    # Previously split_syn_cmd was None whenever target_ram_gb was set,
+    # even though split_synthetic is a separate step that needs to run.
+    # split_synthetic reads the already-generated file — it doesn't need
+    # --target-ram-gb itself; it uses --sizes to know which split labels to create.
+    # When using --target-ram-gb we skip auto-creating split_synthetic in the
+    # step list because the generated file name is "<X.X>GB_tier2_text_heavy"
+    # and split_dataset.py expects a row-count label. User must run split
+    # separately if needed, or we wire it up explicitly.
+    split_syn_cmd = (
+        _python("src/data/split_dataset.py") + [
+            "--source", "synthetic",
+            "--sizes", *sizes_flag,
+        ] + split_extra + _target_mb_extra
+    ) if not args.target_ram_gb else None
 
     return [
-        # ── GROUP: data ───────────────────────────────────
+        # ===== DATA =====
         {
             "name":        "download",
             "group":       "data",
-            "description": "Download Amazon Reviews dataset",
+            "description": "Download Amazon Reviews dataset từ Hugging Face",
             "required":    False,
-            "cmd": _python("src/data/download_amazon.py") + (
-                ["--small"] if args.small_download else
-                ["--category"] + args.amazon_categories
-            ),
+            "cmd": _python("src/data/download_amazon.py") + _dl_flag
+                   + ["--max-rows", str(_download_cap)],
+        },
+        {
+            "name":        "compress",
+            "group":       "data",
+            "description": "Nén .jsonl → .jsonl.gz",
+            "required":    False,
+            "cmd": _python("src/data/compress_jsonl.py") + [
+                "--input",   str(ROOT / "data" / "raw"),
+                "--workers", str(_compress_workers),
+            ],
         },
         {
             "name":        "preprocess",
             "group":       "data",
-            "description": "Preprocess raw Amazon data → Parquet",
+            "description": "Preprocess raw → Parquet",
             "required":    False,
-            "cmd": _python("src/data/preprocess_amazon.py") + ["--metadata"],
+            "cmd": _python("src/data/preprocess_amazon.py")
+                   + ["--metadata"]
+                   + preprocess_extra
+                   + (["--raw-format", "gz"] if not raw_format_extra else raw_format_extra),
         },
         {
             "name":        "split_real",
             "group":       "data",
-            "description": "Split processed data → benchmark splits",
+            "description": "Split real data",
             "required":    False,
             "cmd": _python("src/data/split_dataset.py") + [
-                "--source", source_flag, "--sizes", *sizes_flag,
-            ] + split_extra,
+                "--source", "real",
+                "--sizes",  *sizes_flag,
+            ] + split_extra + _target_mb_extra,
         },
         {
             "name":        "generate_synthetic",
             "group":       "data",
             "description": "Generate synthetic dataset",
             "required":    True,
-            "cmd": _python("src/data/data_generator.py") + ["--sizes", *sizes_flag],
-        },
-        {
-            "name":        "split_synthetic",
-            "group":       "data",
-            "description": "Split synthetic data → benchmark splits",
-            "required":    True,
-            "cmd": _python("src/data/split_dataset.py") + [
-                "--source", "synthetic", "--sizes", *sizes_flag,
-            ] + split_extra,
+            "cmd":         gen_cmd,
         },
 
-        # ── GROUP: benchmark ──────────────────────────────
+        *([
+            {
+                "name":        "split_synthetic",
+                "group":       "data",
+                "description": "Split synthetic data",
+                "required":    True,
+                "cmd":         split_syn_cmd,
+            }
+        ] if split_syn_cmd else []),
+
+        # ===== BENCHMARK =====
         {
             "name":        "benchmark_pandas",
             "group":       "benchmark",
             "description": "Run Pandas benchmark",
             "required":    True,
             "cmd": _python("benchmarks/pandas_run.py") + [
-                "--sizes", *sizes_flag, "--output", "pandas_results.csv",
+                "--sizes",     *sizes_flag,
+                "--data-type", data_type_flag,
+                "--output",    f"pandas_{data_type_flag}_results.csv",
             ],
         },
         {
             "name":        "benchmark_polars",
             "group":       "benchmark",
-            "description": "Run Polars benchmark (lazy mode)",
+            "description": "Run Polars (lazy)",
             "required":    True,
             "cmd": _python("benchmarks/polars_run.py") + [
-                "--sizes", *sizes_flag, "--mode", "lazy", "--output", "polars_results.csv",
+                "--sizes",     *sizes_flag,
+                "--data-type", data_type_flag,
+                "--mode",      "lazy",
+                "--output",    f"polars_{data_type_flag}_results.csv",
             ],
         },
         {
             "name":        "benchmark_polars_eager",
             "group":       "benchmark",
-            "description": "Run Polars benchmark (eager mode)",
+            "description": "Run Polars (eager)",
             "required":    False,
             "cmd": _python("benchmarks/polars_run.py") + [
-                "--sizes", *sizes_flag, "--mode", "eager", "--output", "polars_eager_results.csv",
+                "--sizes",     *sizes_flag,
+                "--data-type", data_type_flag,
+                "--mode",      "eager",
+                "--output",    f"polars_eager_{data_type_flag}_results.csv",
             ],
         },
         {
@@ -179,21 +282,12 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
             "description": "Run Dask benchmark",
             "required":    True,
             "cmd": _python("benchmarks/dask_run.py") + [
-                "--sizes", *sizes_flag,
-                "--workers", str(args.dask_workers),
+                "--sizes",        *sizes_flag,
+                "--data-type",    data_type_flag,
+                "--workers",      str(args.dask_workers),
                 "--memory-limit", args.dask_memory,
-                "--output", "dask_results.csv",
+                "--output",       f"dask_{data_type_flag}_results.csv",
             ],
-        },
-        {
-            "name":        "benchmark_all",
-            "group":       "benchmark",
-            "description": "Run full benchmark matrix (all frameworks together)",
-            "required":    False,
-            "cmd": _python("benchmarks/run_all.py") + [
-                "--sizes", *sizes_flag, "--frameworks", *frameworks_flag,
-                "--output", "all_results.csv",
-            ] + benchmark_extra,
         },
     ]
 
@@ -211,7 +305,10 @@ def _load_resume() -> set[str]:
 
 def _save_resume(completed: set[str]) -> None:
     RESUME_FILE.write_text(
-        json.dumps({"completed": sorted(completed), "updated": datetime.now().isoformat()}, indent=2)
+        json.dumps(
+            {"completed": sorted(completed), "updated": datetime.now().isoformat()},
+            indent=2,
+        )
     )
 
 def _clear_resume() -> None:
@@ -231,7 +328,7 @@ def run_step(step: dict, dry_run: bool = False, verbose: bool = False) -> bool:
     logger.info("─" * 60)
     logger.info(f"  STEP : {name}")
     logger.info(f"  DESC : {step['description']}")
-    logger.info(f"  CMD  : {' '.join(cmd)}")
+    logger.info(f"  CMD  : {' '.join(str(c) for c in cmd)}")
     logger.info("─" * 60)
 
     if dry_run:
@@ -268,11 +365,11 @@ def run_step(step: dict, dry_run: bool = False, verbose: bool = False) -> bool:
         return False
 
     except FileNotFoundError:
-        logger.error(f"  ✗ Script not found: {cmd[1]}")
+        logger.error(f"Script not found: {cmd[1]}")
         return False
 
     except KeyboardInterrupt:
-        logger.warning("  ⚠ Interrupted by user")
+        logger.warning("Interrupted by user")
         raise
 
 
@@ -281,7 +378,8 @@ def run_step(step: dict, dry_run: bool = False, verbose: bool = False) -> bool:
 # ─────────────────────────────────────────────────────────
 def print_sysinfo() -> None:
     try:
-        import platform, psutil
+        import platform
+        import psutil
         print("\n" + "=" * 55)
         print("  SYSTEM INFO")
         print("=" * 55)
@@ -313,33 +411,52 @@ def main() -> None:
 
     data_grp = parser.add_argument_group("Data")
     data_grp.add_argument("--sizes", nargs="+", default=["1M", "10M"],
-        choices=["1M", "5M", "10M", "20M", "50M", "100M"])
+        choices=["1M", "5M", "10M", "50M", "100M"])
     data_grp.add_argument("--data-source", choices=["auto", "real", "synthetic"], default="auto")
-    data_grp.add_argument("--amazon-categories", nargs="+",
-        default=["All_Beauty", "Gift_Cards", "Software"])
-    data_grp.add_argument("--small-download", action="store_true", default=True)
-    data_grp.add_argument("--partition", action="store_true",
-        help="Multi-file partitions cho dataset 20M+")
+    data_grp.add_argument("--amazon-categories", nargs="+", default=None)
+    data_grp.add_argument("--small-download", action="store_true", default=False)
+    data_grp.add_argument(
+        "--raw-format", choices=["auto", "gz", "jsonl"], default="auto",
+    )
+    data_grp.add_argument("--partition", action="store_true")
+    data_grp.add_argument("--keep-original", action="store_true", default=False)
+    data_grp.add_argument("--target-file-mb", type=int, default=128)
+    data_grp.add_argument(
+        "--data-type",
+        choices=["real", "syn", "both"],
+        default="real",
+    )
+    data_grp.add_argument(
+        "--target-ram-gb",
+        nargs="+",
+        type=float,
+        metavar="GB",
+        help="Generate synthetic datasets targeting RAM size instead of row count",
+    )
 
     bench_grp = parser.add_argument_group("Benchmark")
     bench_grp.add_argument("--frameworks", nargs="+",
         default=["pandas", "polars_lazy", "dask"],
         choices=["pandas", "polars_lazy", "polars_eager", "dask"])
-    bench_grp.add_argument("--dask-workers", type=int, default=4)
-    bench_grp.add_argument("--dask-memory", default="3GB")
+    bench_grp.add_argument("--dask-workers",  type=int, default=4)
+    bench_grp.add_argument("--dask-memory",   default="3GB")
     bench_grp.add_argument("--generate-data", action="store_true")
 
     ctrl_grp = parser.add_argument_group("Pipeline control")
-    ctrl_grp.add_argument("--groups", nargs="+", choices=["data", "benchmark"])
-    ctrl_grp.add_argument("--steps", nargs="+")
+    ctrl_grp.add_argument("--groups",       nargs="+", choices=["data", "benchmark"])
+    ctrl_grp.add_argument("--steps",        nargs="+")
     ctrl_grp.add_argument("--skip-download", action="store_true")
-    ctrl_grp.add_argument("--skip-steps", nargs="+", default=[])
-    ctrl_grp.add_argument("--resume", action="store_true")
+    ctrl_grp.add_argument("--skip-steps",   nargs="+", default=[])
+    ctrl_grp.add_argument("--resume",       action="store_true")
     ctrl_grp.add_argument("--clear-resume", action="store_true")
-    ctrl_grp.add_argument("--dry-run", action="store_true")
-    ctrl_grp.add_argument("--verbose", action="store_true",
-        help="In toàn bộ output subprocess ra console")
-    ctrl_grp.add_argument("--sysinfo", action="store_true")
+    ctrl_grp.add_argument("--dry-run",      action="store_true")
+    ctrl_grp.add_argument("--verbose",      action="store_true")
+    ctrl_grp.add_argument("--sysinfo",      action="store_true")
+    ctrl_grp.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-generate files even if they already exist (passed to data_generator.py)",
+    )
 
     args = parser.parse_args()
 
@@ -355,17 +472,28 @@ def main() -> None:
     logger.info("  BIG DATA BENCHMARK PIPELINE")
     logger.info("  Pandas vs Polars vs Dask")
     logger.info("=" * 60)
-    logger.info(f"  Root       : {ROOT}")
-    logger.info(f"  Sizes      : {args.sizes}")
-    logger.info(f"  Frameworks : {args.frameworks}")
-    logger.info(f"  Data source: {args.data_source}")
-    logger.info(f"  Partition  : {args.partition}")
-    logger.info(f"  Dry run    : {args.dry_run}")
-    logger.info(f"  Resume     : {args.resume}")
-    logger.info(f"  Log file   : {LOG_FILE}")
+    logger.info(f"  Root           : {ROOT}")
+    logger.info(f"  Sizes          : {args.sizes}")
+    logger.info(f"  Frameworks     : {args.frameworks}")
+    logger.info(f"  Data source    : {args.data_source}")
+    logger.info(f"  Raw format     : {args.raw_format}")
+    logger.info(f"  Partition      : {args.partition}")
+    logger.info(f"  Target MB/file : {args.target_file_mb}")
+    logger.info(f"  Keep original  : {args.keep_original}")
+    logger.info(f"  Force          : {args.force}")          # FIX #3: log it
+    logger.info(f"  Target RAM GB  : {args.target_ram_gb}")
+    logger.info(f"  Dry run        : {args.dry_run}")
+    logger.info(f"  Resume         : {args.resume}")
+    logger.info(f"  Log file       : {LOG_FILE}")
     logger.info("=" * 60)
 
     all_steps = build_steps(args)
+
+    # Inject --keep-original into compress step if requested
+    for step in all_steps:
+        if step["name"] == "compress" and args.keep_original:
+            step["cmd"].append("--keep-original")
+            step["description"] += " [giữ .jsonl gốc]"
 
     # Filter steps
     if args.steps:

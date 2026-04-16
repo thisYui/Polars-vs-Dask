@@ -80,6 +80,7 @@ def main(
     threads:        int  = DASK_THREADS_PER_WORKER,
     memory_limit:   str  = DASK_MEMORY_LIMIT,
     partition_size: str  = DASK_PARTITION_SIZE,
+    data_type: str = "real",
 ) -> None:
     import dask
 
@@ -105,7 +106,7 @@ def main(
     try:
         for size_label in sizes:
             n_rows = all_size_map.get(size_label)
-            path   = get_dataset_path(size_label, file_format)
+            path = get_dataset_path(size_label, file_format, data_type)
 
             if not path.exists():
                 logger.warning(f"Dataset '{size_label}' not found — skip")
@@ -183,6 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-cluster",     action="store_true")
     parser.add_argument("--partition-tuning", action="store_true",
                         help="Run partition size tuning experiment")
+    parser.add_argument("--data-type", choices=["real", "syn"], default="real")
     args = parser.parse_args()
 
     if args.partition_tuning:
@@ -199,4 +201,5 @@ if __name__ == "__main__":
             threads=args.threads,
             memory_limit=args.memory_limit,
             partition_size=args.partition_size,
+            data_type=args.data_type,
         )

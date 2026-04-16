@@ -15,7 +15,9 @@ DATA_DIR        = ROOT_DIR / "data"
 RAW_DIR         = DATA_DIR / "raw"          # downloaded Amazon gz/json
 PROCESSED_DIR   = DATA_DIR / "processed"   # parquet after clean
 SYNTHETIC_DIR   = DATA_DIR / "synthetic"   # fully synthetic datasets
-BENCHMARK_DIR   = DATA_DIR / "benchmark"   # ready-to-use splits (1M/10M/100M)
+BENCHMARK_DIR   = DATA_DIR / "benchmark"   # ready-to-use splits (1M/10M/50M)
+BENCHMARK_REAL_DIR   = DATA_DIR / "benchmark_real"   # ready-to-use splits (1M/10M/50M)
+BENCHMARK_SYN_DIR   = DATA_DIR / "benchmark_syn"   # ready-to-use splits (1M/10M/50M)
 
 RESULTS_DIR     = ROOT_DIR / "results"
 RAW_RESULTS_DIR = RESULTS_DIR / "raw"
@@ -26,8 +28,8 @@ LOG_DIR         = ROOT_DIR / "logs"
 
 # Auto-create all directories
 for _d in [
-    RAW_DIR, PROCESSED_DIR, SYNTHETIC_DIR, BENCHMARK_DIR,
-    RAW_RESULTS_DIR, TABLES_DIR, PLOTS_DIR, LOG_DIR,
+    RAW_DIR, PROCESSED_DIR, SYNTHETIC_DIR, BENCHMARK_REAL_DIR,
+    BENCHMARK_SYN_DIR, RAW_RESULTS_DIR, TABLES_DIR, PLOTS_DIR, LOG_DIR,
 ]:
     _d.mkdir(parents=True, exist_ok=True)
 
@@ -51,7 +53,6 @@ SCALABILITY_SIZES = {
     "1M":   1_000_000,
     "5M":   5_000_000,
     "10M":  10_000_000,
-    "20M": 20_000_000,
     "50M":  50_000_000,
     "100M": 100_000_000,
 }
@@ -60,23 +61,38 @@ SCALABILITY_SIZES = {
 # Dataset Schema  (Amazon Reviews)
 # ─────────────────────────────────────────────────────────
 SCHEMA_COLUMNS = [
-    "review_id",
-    "user_id",
-    "product_id",
-    "rating",
-    "review_text",
-    "review_time",
-    "category",
-    "verified_purchase",
+    "review_id",        # R + 10 digits  (synthetic) / hash(user+product) (real)
+    "user_id",          # 28-char alphanumeric
+    "product_id",       # ASIN  e.g. B096S6LZV4
+    "parent_asin",      # parent product ASIN (groups variants)
+    "rating",           # int8  1-5
+    "review_title",     # short title of the review
+    "review_text",      # full review body
+    "review_time",      # datetime (normalised to date)
+    "helpful_vote",     # int32  number of helpful votes
+    "category",         # string  e.g. "Electronics"
+    "verified_purchase",# bool
 ]
 
-# Real Amazon JSON → internal field mapping
+# Real Amazon JSON (2023 HuggingFace format) → internal field mapping
+# Fields present in the HF dataset:
+#   rating, title, text, images, asin, parent_asin,
+#   user_id, timestamp (ms), helpful_vote, verified_purchase
 AMAZON_FIELD_MAP = {
-    "reviewerID":    "user_id",
+    # HuggingFace 2023 format
     "asin":          "product_id",
+    "parent_asin":   "parent_asin",
+    "title":         "review_title",
+    "text":          "review_text",
+    "timestamp":     "review_time",   # milliseconds epoch → handled in _cast_chunk
+    "helpful_vote":  "helpful_vote",
+    "verified_purchase": "verified_purchase",
+    # Legacy UCSD format (kept for backward compat)
+    "reviewerID":    "user_id",
     "reviewText":    "review_text",
     "overall":       "rating",
     "unixReviewTime":"review_time",
+    "summary":       "review_title",
     "verified":      "verified_purchase",
 }
 
