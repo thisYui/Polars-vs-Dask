@@ -68,9 +68,9 @@ logger = get_logger("data.generator")
 # Fix #3 & #8 — Text length and entropy controls
 # ─────────────────────────────────────────────────────────
 
-TEXT_MIN_LEN = 40 # 40 for 1M,
-TEXT_MAX_LEN = 220 # 240 for 1M
-TEXT_VARIANTS = 1200
+TEXT_MIN_LEN = 60
+TEXT_MAX_LEN = 300
+TEXT_VARIANTS = 2000
 RANDOM_INSERT_PROB = 0.02
 
 # Fix #5 — ID reuse vs fresh-ID probability

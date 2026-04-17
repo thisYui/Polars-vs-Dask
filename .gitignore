@@ -50,21 +50,12 @@ report/*.fls
 
 
 logs/
-# data
-data/
 !data/README.md
 
 # benchmark results
 results/
 
-# logs
-logs/
-
 # parquet
 *.parquet
-
-# cache
-__pycache__/
-.ipynb_checkpoints/
 
 test.*
