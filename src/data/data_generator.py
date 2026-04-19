@@ -386,23 +386,30 @@ def calibrated_rows_for_size(
     sample_n:       int = _CALIBRATION_ROWS,
 ) -> tuple[int, float]:
     """
-    Fix #16: Generate a small sample, measure actual in-memory bytes/row,
-    then return an exact row count that hits `target_bytes`.
+    Fix #16 (improved): Generate a small sample, write to a temp Parquet file,
+    read it back, then measure actual in-memory RAM bytes/row.
 
     Returns:
         (n_rows, measured_bytes_per_row)
 
-    Why this matters
-    ─────────────────
-    _BYTES_PER_ROW is a static estimate.  Real row size depends on
-    text length distribution (TierConfig.text_min/max_len) and which
-    columns the workload includes.  For TEXT_HEAVY tier2 a single
-    review_text column alone can exceed 500 bytes/row, making the
-    hardcoded 85 B/row estimate off by 6×.
+    Why the original was wrong
+    ──────────────────────────
+    The previous version measured `memory_usage(deep=True)` on the freshly
+    generated DataFrame.  That measures Python object RAM *during generation*,
+    but when a Parquet file is read back by Pandas/PyArrow the string columns
+    land in Arrow StringArray buffers whose per-row overhead is different
+    (often 2–3× higher for short-to-medium strings due to Arrow offset arrays
+    and validity bitmaps on top of the raw character data).
 
-    This function replaces the guess with a one-time 10 k-row probe
-    (~0.1 s) before the main generation loop.
+    Result: the old code underestimated bytes/row by ~2.4× for tier2/TEXT_HEAVY,
+    so --target-ram-gb 5 produced only ~2.1 GB instead of 5 GB.
+
+    Fix: write the sample to a temporary Parquet file, read it back with
+    pd.read_parquet(), then measure memory_usage(deep=True) on *that* DataFrame.
+    This captures the real post-read RAM footprint that benchmarks will see.
     """
+    import tempfile
+
     rng_probe = np.random.default_rng(seed)
     gen       = SyntheticReviewGenerator(
         n_rows     = sample_n,
@@ -411,17 +418,31 @@ def calibrated_rows_for_size(
         seed       = seed,
         chunk_size = sample_n,        # single chunk, no loop overhead
     )
-    sample    = gen._generate_chunk(sample_n, rng_probe)
+    sample = gen._generate_chunk(sample_n, rng_probe)
 
-    # pandas memory_usage(deep=True) counts actual string bytes
-    total_bytes   = sample.memory_usage(deep=True).sum()
-    bytes_per_row = total_bytes / sample_n
+    # FIX #17: Write sample to temp Parquet then read back to measure
+    # the *actual* RAM footprint that pd.read_parquet() produces,
+    # not the in-memory generation footprint (which is ~2–3× smaller).
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        table = pa.Table.from_pandas(sample, preserve_index=False)
+        pq.write_table(table, tmp_path, compression=PARQUET_COMPRESSION)
+        del sample, table
+
+        sample_readback = pd.read_parquet(tmp_path)
+        total_bytes     = sample_readback.memory_usage(deep=True).sum()
+        bytes_per_row   = total_bytes / sample_n
+        del sample_readback
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
     n_rows = max(1, int(target_bytes / bytes_per_row))
 
     logger.info(
         f"[calibrate] sample={sample_n:,} rows | "
-        f"bytes/row={bytes_per_row:.1f} | "
+        f"bytes/row={bytes_per_row:.1f} (post-parquet read) | "
         f"target={target_bytes / 1024**3:.3f} GB → {n_rows:,} rows"
     )
     return n_rows, bytes_per_row

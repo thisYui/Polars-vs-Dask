@@ -134,10 +134,21 @@ POLARS_STREAMING  = True             # enable streaming for > RAM datasets
 POLARS_N_THREADS  = None             # None = auto (all cores)
 
 # Dask
-DASK_PARTITION_SIZE      = "256MB"
-DASK_N_WORKERS           = 4
+# ── Memory budget ──────────────────────────────────────────────────────────
+# Rule of thumb on a 16 GB machine:
+#   Leave ~4 GB for OS + Pandas/Polars overhead.
+#   Remaining ~12 GB split across workers.
+#   2 workers × 4 GB = 8 GB total managed by Dask  ← safe for join workload
+#
+# Why the old 2 GB limit caused OOM on join:
+#   Dask was trying to persist both the reviews AND metadata inside each
+#   worker (combined ~3–4 GB per worker), exceeding the 1.86 GiB RSS limit.
+#   Raising the limit AND switching to broadcast join in join.py fixes this.
+# ──────────────────────────────────────────────────────────────────────────
+DASK_PARTITION_SIZE      = "128MB"
+DASK_N_WORKERS           = 2
 DASK_THREADS_PER_WORKER  = 2
-DASK_MEMORY_LIMIT        = "3GB"     # per worker
+DASK_MEMORY_LIMIT        = "4GB"     # per worker  (was 2GB → OOM on join)
 
 # ─────────────────────────────────────────────────────────
 # IO Settings

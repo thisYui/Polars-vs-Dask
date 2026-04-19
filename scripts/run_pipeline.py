@@ -440,8 +440,8 @@ def main() -> None:
     bench_grp.add_argument("--frameworks", nargs="+",
         default=["pandas", "polars_lazy", "dask"],
         choices=["pandas", "polars_lazy", "polars_eager", "dask"])
-    bench_grp.add_argument("--dask-workers",  type=int, default=4)
-    bench_grp.add_argument("--dask-memory",   default="3GB")
+    bench_grp.add_argument("--dask-workers",  type=int, default=2)
+    bench_grp.add_argument("--dask-memory",   default="4GB")
     bench_grp.add_argument("--generate-data", action="store_true")
 
     ctrl_grp = parser.add_argument_group("Pipeline control")
