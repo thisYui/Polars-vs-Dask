@@ -67,53 +67,29 @@ def polars_join(path: Path, lazy: bool = True) -> "pl.DataFrame":
     )
 
 
-# def dask_join(path: Path) -> "pd.DataFrame":
-#     import dask
-#     import dask.dataframe as dd
-#     import pandas as pd
-#     from dask.distributed import get_client
-#
-#     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-#     reviews = dd.read_parquet(read_path)
-#     meta = pd.read_parquet(_ensure_metadata())
-#
-#     def _merge_partition(df):
-#         return df.merge(meta, on="product_id", how="left")
-#
-#     # Tạm đóng distributed client để dùng synchronous scheduler
-#     try:
-#         client = get_client()
-#         client.close()
-#     except ValueError:
-#         pass  # Không có client nào đang chạy
-#
-#     with dask.config.set({"dataframe.scheduler-warning": False}):
-#         result = reviews.map_partitions(_merge_partition).compute(
-#             scheduler="synchronous"
-#         )
-#
-#     return result
-
 def dask_join(path: Path) -> "pd.DataFrame":
     """
-    Dask join using synchronous (single-threaded) scheduler.
-    Uses scheduler="synchronous" because pyarrow memory is not
-    released back to the OS between tasks on Windows — distributed
-    workers accumulate ~2.6 GiB unmanaged RSS and get killed by
-    the nanny at 95% budget. The synchronous scheduler has no
-    nanny and reuses the same heap.
+    Dask join using map_partitions (Manual Broadcast Join strategy).
+    Leverages Column Pushdown for both datasets and avoids the distributed
+    shuffle for efficiency on machines with limited RAM.
     """
-    import dask
     import dask.dataframe as dd
     import pandas as pd
+    from src.core.config import GROUPBY_COLUMN, SCHEMA_COLUMNS
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
 
-    reviews = dd.read_parquet(read_path)
-    meta = pd.read_parquet(_ensure_metadata())
+    # ❗ Pushdown: Read only columns needed for the join/final result
+    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
+    
+    # ❗ Pushdown: Read metadata with subset of columns
+    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
 
-    with (dask.config.set({"dataframe.scheduler-warning": False})):
-        return reviews.merge(meta, on="product_id", how="left"
-                             ).compute(
-            scheduler="synchronous"
-        )
+    # ❗ Efficient Broadcast Join:
+    # Passing 'meta' as a direct argument to map_partitions is captured in a 
+    # closure, effectively broadcasting it to all workers.
+    def _local_merge(df, meta_df):
+        return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
+
+    # Distributed compute (benefits from multiple cores)
+    return reviews.map_partitions(_local_merge, meta_df=meta).compute()

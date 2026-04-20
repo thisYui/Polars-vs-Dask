@@ -86,22 +86,33 @@ def polars_pipeline(path: Path, lazy: bool = True) -> "pl.DataFrame":
 def dask_pipeline(path: Path) -> "pd.DataFrame":
     import dask.dataframe as dd
     import pandas as pd
+    from src.core.config import GROUPBY_COLUMN
 
-    meta = pd.read_parquet(_ensure_metadata(), columns=["product_id", "price", "brand"])
+    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
 
     # Fix: handle partition folder
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    reviews = dd.read_parquet(read_path)
+    
+    # ❗ Pushdown: Filter and GroupBy on a subset of columns
+    reviews = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"])
 
-    grouped = (
+    # Build the lazy pipeline: Filter -> GroupBy -> Aggregation
+    pipeline = (
         reviews[reviews["rating"] >= FILTER_RATING_THRESHOLD]
         .groupby(GROUPBY_COLUMN)["rating"]
         .agg(["mean", "count", "sum"])
         .reset_index()
-        .compute()
     )
+    
+    # ❗ Stay in Dask! Use map_partitions for the final join instead of intermediate compute.
+    # We sort at the end after compute because sorting is expensive in distributed Dask 
+    # and usually done as the last step in a report.
+    def _local_join(df, meta_df):
+        return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
+
+    # Distributed compute + final sort
     return (
-        grouped
-        .merge(meta, on="product_id", how="left")
+        pipeline.map_partitions(_local_join, meta_df=meta)
+        .compute()
         .sort_values("count", ascending=False)
     )

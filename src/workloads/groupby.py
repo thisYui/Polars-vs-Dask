@@ -57,7 +57,10 @@ def dask_groupby(path: Path) -> "pd.DataFrame":
 
     # Fix: handle partition folder the same way as filter/join
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    ddf = dd.read_parquet(read_path)
+    
+    # ❗ Pushdown: only read grouping and aggregation columns
+    ddf = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"])
+    
     return (
         ddf.groupby(GROUPBY_COLUMN)["rating"]
         .agg(["mean", "count", "sum"])

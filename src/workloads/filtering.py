@@ -47,9 +47,13 @@ def polars_filter(path: Path, lazy: bool = True) -> "pl.DataFrame":
 
 def dask_filter(path: Path) -> "pd.DataFrame":
     import dask.dataframe as dd
+    from src.core.config import SCHEMA_COLUMNS
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    ddf = dd.read_parquet(read_path)
-    result = ddf[ddf["rating"] >= FILTER_RATING_THRESHOLD].compute()
-    _      = len(result)   # force evaluation (consistent with pandas_filter)
-    return result
+    
+    # ❗ Pushdown columns: Specify columns explicitly to leverage Parquet's columnar storage.
+    # In a real-world scenario, you'd only read the columns you need for the final report.
+    ddf = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
+    
+    # Filter and compute using the distributed scheduler (default)
+    return ddf[ddf["rating"] >= FILTER_RATING_THRESHOLD].compute()

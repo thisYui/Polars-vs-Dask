@@ -59,3 +59,5 @@ results/
 *.parquet
 
 test.*
+
+GEMINI.md
