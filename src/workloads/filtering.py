@@ -47,18 +47,17 @@ def polars_filter(path: Path, lazy: bool = True) -> "pl.DataFrame":
 
 def dask_filter(path: Path) -> "pd.DataFrame":
     import dask.dataframe as dd
-    import psutil
     import warnings
     from src.core.config import SCHEMA_COLUMNS
 
-    # ❗ Silence scheduler warning definitively
+    # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    
-    # ❗ Pushdown + Repartition: Ensure balanced load across CPU cores
-    n_cores = psutil.cpu_count(logical=False) or 4
-    ddf = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS).repartition(npartitions=n_cores * 2)
-    
-    # ❗ Stability: Using 'threads' scheduler avoids process-shuffling overhead on Windows
+
+    # Pushdown: Always good practice to reduce I/O.
+    # We let Dask handle partitioning naturally based on the Parquet file structure.
+    ddf = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
+
+    # Using 'threads' scheduler for RSS memory stability on Windows 16GB.
     return ddf[ddf["rating"] >= FILTER_RATING_THRESHOLD].compute(scheduler="threads")

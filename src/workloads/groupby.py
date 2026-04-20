@@ -55,20 +55,19 @@ def polars_groupby(path: Path, lazy: bool = True) -> "pl.DataFrame":
 def dask_groupby(path: Path) -> "pd.DataFrame":
     import dask
     import dask.dataframe as dd
-    import psutil
     import warnings
 
-    # ❗ Silence scheduler warning definitively
+    # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
     # Fix: handle partition folder the same way as filter/join
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    
-    # ❗ Pushdown + Repartition
-    n_cores = psutil.cpu_count(logical=False) or 4
-    ddf = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"]).repartition(npartitions=n_cores * 2)
-    
-    # ❗ Stability: Disable P2P shuffle as it often fails on Windows with threaded scheduler
+
+    # Column Pushdown: Good practice to read only required columns
+    ddf = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"])
+
+    # Stability: Use tasks-based shuffle to avoid P2P transfer failures on Windows.
+    # The 'threads' scheduler is used for shared memory benefits.
     with dask.config.set({"dataframe.shuffle.method": "tasks", "dataframe.scheduler-warning": False}):
         return (
             ddf.groupby(GROUPBY_COLUMN)["rating"]

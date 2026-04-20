@@ -57,9 +57,18 @@ def start_cluster(n_workers, threads, memory_limit):
 
 
 def stop_cluster(cluster, client):
+    import logging
+    import time
     try:
-        if client:  client.close()
-        if cluster: cluster.close()
+        if client:
+            # Silence internal distributed errors during shutdown race conditions
+            logging.getLogger("distributed.client").setLevel(logging.ERROR)
+            logging.getLogger("distributed.worker").setLevel(logging.CRITICAL)
+            client.close()
+        if cluster:
+            cluster.close()
+        # Tiny sleep to allow sockets to close gracefully on Windows
+        time.sleep(0.2)
     except Exception:
         pass
 

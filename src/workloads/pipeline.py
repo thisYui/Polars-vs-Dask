@@ -87,41 +87,38 @@ def dask_pipeline(path: Path) -> "pd.DataFrame":
     import dask
     import dask.dataframe as dd
     import pandas as pd
-    import psutil
     import warnings
     from src.core.config import GROUPBY_COLUMN
 
     # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
-    # Pushdown: Read metadata and set index early
-    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"]).set_index(GROUPBY_COLUMN)
+    # Pushdown: Read metadata
+    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    n_cores = psutil.cpu_count(logical=False) or 4
-    
-    # Pushdown + Repartition
-    reviews = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"]).repartition(npartitions=n_cores * 2)
 
-    # Stability: Disable P2P shuffle as it often fails on Windows with threaded scheduler
+    # Column Pushdown
+    reviews = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"])
+
+    # Stability: Use tasks-based shuffle and threaded scheduler
     with dask.config.set({"dataframe.shuffle.method": "tasks", "dataframe.scheduler-warning": False}):
-        # Building the lazy pipeline
         pipeline = (
             reviews[reviews["rating"] >= FILTER_RATING_THRESHOLD]
             .groupby(GROUPBY_COLUMN)["rating"]
             .agg(["mean", "count", "sum"])
             .reset_index()
         )
-        
-        # Explicit Metadata for the join
-        meta_out = pipeline._meta.merge(meta.head(0), left_on=GROUPBY_COLUMN, right_index=True, how="left")
 
-        def _local_join(df, meta_df):
-            return df.join(meta_df, on=GROUPBY_COLUMN, how="left")
+        # Metadata for join
+        meta_out = pipeline._meta.merge(meta.head(0), on=GROUPBY_COLUMN, how="left")
+
+        def _local_merge(df, meta_df):
+            return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
 
         # Distributed compute + final sort
         return (
-            pipeline.map_partitions(_local_join, meta_df=meta, meta=meta_out)
+            pipeline.map_partitions(_local_merge, meta_df=meta, meta=meta_out)
             .compute(scheduler="threads")
             .sort_values("count", ascending=False)
         )

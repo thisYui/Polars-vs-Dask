@@ -69,37 +69,32 @@ def polars_join(path: Path, lazy: bool = True) -> "pl.DataFrame":
 
 def dask_join(path: Path) -> "pd.DataFrame":
     """
-    Elite Dask Join: 
-    - Column Pushdown
-    - Index-based Join (Hash reuse)
-    - Manual Broadcast via map_partitions with explicit metadata
-    - Repartitioning for core utilization
+    Practical Dask Join: 
+    - Manual Broadcast Join via map_partitions (prevents OOM on Windows)
+    - Column Pushdown for both tables
     """
     import dask
     import dask.dataframe as dd
     import pandas as pd
-    import psutil
     import warnings
     from src.core.config import GROUPBY_COLUMN, SCHEMA_COLUMNS
 
-    # ❗ Silence scheduler warning definitively
+    # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-    n_cores = psutil.cpu_count(logical=False) or 4
 
-    # ❗ Pushdown + Repartition
-    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS).repartition(npartitions=n_cores * 2)
-    
-    # ❗ Micro-opt: set_index on metadata table to reuse hash for each partition
-    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"]).set_index(GROUPBY_COLUMN)
+    # Pushdown: Read only columns needed for the join
+    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
+    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
 
-    # ❗ Explicit Metadata: Tell Dask exactly what the output schema looks like
-    meta_out = reviews._meta.merge(meta.head(0), left_on=GROUPBY_COLUMN, right_index=True, how="left")
+    # Define metadata for the output (schema info for Dask)
+    meta_out = reviews._meta.merge(meta.head(0), on=GROUPBY_COLUMN, how="left")
 
-    def _local_join(df, meta_df):
-        return df.join(meta_df, on=GROUPBY_COLUMN, how="left")
+    def _local_merge(df, meta_df):
+        # Using standard merge as hash reuse via set_index is not persistent in Pandas
+        return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
 
-    # ❗ Silence scheduler warning and use threads for stability
+    # Use the threaded scheduler for stable RSS memory management on Windows
     with dask.config.set({"dataframe.scheduler-warning": False}):
-        return reviews.map_partitions(_local_join, meta_df=meta, meta=meta_out).compute(scheduler="threads")
+        return reviews.map_partitions(_local_merge, meta_df=meta, meta=meta_out).compute(scheduler="threads")
