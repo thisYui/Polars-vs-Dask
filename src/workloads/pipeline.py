@@ -91,19 +91,19 @@ def dask_pipeline(path: Path) -> "pd.DataFrame":
     import warnings
     from src.core.config import GROUPBY_COLUMN
 
-    # ❗ Silence scheduler warning definitively
+    # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
-    # ❗ Pushdown: Read metadata and set index early
+    # Pushdown: Read metadata and set index early
     meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"]).set_index(GROUPBY_COLUMN)
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
     n_cores = psutil.cpu_count(logical=False) or 4
     
-    # ❗ Pushdown + Repartition
+    # Pushdown + Repartition
     reviews = dd.read_parquet(read_path, columns=[GROUPBY_COLUMN, "rating"]).repartition(npartitions=n_cores * 2)
 
-    # ❗ Stability: Disable P2P shuffle as it often fails on Windows with threaded scheduler
+    # Stability: Disable P2P shuffle as it often fails on Windows with threaded scheduler
     with dask.config.set({"dataframe.shuffle.method": "tasks", "dataframe.scheduler-warning": False}):
         # Building the lazy pipeline
         pipeline = (
@@ -113,7 +113,7 @@ def dask_pipeline(path: Path) -> "pd.DataFrame":
             .reset_index()
         )
         
-        # ❗ Explicit Metadata for the join
+        # Explicit Metadata for the join
         meta_out = pipeline._meta.merge(meta.head(0), left_on=GROUPBY_COLUMN, right_index=True, how="left")
 
         def _local_join(df, meta_df):
