@@ -69,27 +69,37 @@ def polars_join(path: Path, lazy: bool = True) -> "pl.DataFrame":
 
 def dask_join(path: Path) -> "pd.DataFrame":
     """
-    Dask join using map_partitions (Manual Broadcast Join strategy).
-    Leverages Column Pushdown for both datasets and avoids the distributed
-    shuffle for efficiency on machines with limited RAM.
+    Elite Dask Join: 
+    - Column Pushdown
+    - Index-based Join (Hash reuse)
+    - Manual Broadcast via map_partitions with explicit metadata
+    - Repartitioning for core utilization
     """
+    import dask
     import dask.dataframe as dd
     import pandas as pd
+    import psutil
+    import warnings
     from src.core.config import GROUPBY_COLUMN, SCHEMA_COLUMNS
 
+    # ❗ Silence scheduler warning definitively
+    warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
+
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
+    n_cores = psutil.cpu_count(logical=False) or 4
 
-    # ❗ Pushdown: Read only columns needed for the join/final result
-    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
+    # ❗ Pushdown + Repartition
+    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS).repartition(npartitions=n_cores * 2)
     
-    # ❗ Pushdown: Read metadata with subset of columns
-    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
+    # ❗ Micro-opt: set_index on metadata table to reuse hash for each partition
+    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"]).set_index(GROUPBY_COLUMN)
 
-    # ❗ Efficient Broadcast Join:
-    # Passing 'meta' as a direct argument to map_partitions is captured in a 
-    # closure, effectively broadcasting it to all workers.
-    def _local_merge(df, meta_df):
-        return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
+    # ❗ Explicit Metadata: Tell Dask exactly what the output schema looks like
+    meta_out = reviews._meta.merge(meta.head(0), left_on=GROUPBY_COLUMN, right_index=True, how="left")
 
-    # Distributed compute (benefits from multiple cores)
-    return reviews.map_partitions(_local_merge, meta_df=meta).compute()
+    def _local_join(df, meta_df):
+        return df.join(meta_df, on=GROUPBY_COLUMN, how="left")
+
+    # ❗ Silence scheduler warning and use threads for stability
+    with dask.config.set({"dataframe.scheduler-warning": False}):
+        return reviews.map_partitions(_local_join, meta_df=meta, meta=meta_out).compute(scheduler="threads")
