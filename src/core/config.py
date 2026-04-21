@@ -57,6 +57,25 @@ SCALABILITY_SIZES = {
     "100M": 100_000_000,
 }
 
+# GB-based sizes for --target-ram-gb workflow.
+# Row count is None because the actual count depends on calibrated bytes/row
+# and is only known after generation. The benchmark runners detect row count
+# at runtime via parquet metadata instead of a static lookup.
+GB_SIZES: dict[str, None] = {
+    "1GB":  None,
+    "5GB":  None,
+    "10GB": None,
+    "20GB": None,
+    "50GB": None,
+}
+
+# All valid size labels (row-count + GB-based)
+ALL_SIZE_LABELS: list[str] = list({
+    **BENCHMARK_SIZES,
+    **SCALABILITY_SIZES,
+    **{k: 0 for k in GB_SIZES},   # 0 used as a sentinel; real value detected at runtime
+}.keys())
+
 # ─────────────────────────────────────────────────────────
 # Dataset Schema  (Amazon Reviews)
 # ─────────────────────────────────────────────────────────

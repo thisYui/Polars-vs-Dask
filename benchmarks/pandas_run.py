@@ -78,7 +78,9 @@ if __name__ == "__main__":
     all_sizes = list({**BENCHMARK_SIZES, **SCALABILITY_SIZES}.keys())
 
     parser = argparse.ArgumentParser(description="Pandas benchmark runner")
-    parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"], choices=all_sizes)
+    parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"],
+        choices=["1M", "5M", "10M", "50M", "100M",
+                 "1GB", "5GB", "10GB", "20GB", "50GB"])
     parser.add_argument("--workloads", nargs="+", default=WORKLOADS,     choices=WORKLOADS)
     parser.add_argument("--runs",      type=int,  default=BENCHMARK_RUNS)
     parser.add_argument("--format",    choices=["parquet", "csv"],        default="parquet")

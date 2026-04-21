@@ -43,7 +43,11 @@ Usage:
     python run_pipeline.py --steps split_real --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M --data-type syn --partition --verbose
     python run_pipeline.py --steps generate_synthetic --target-ram-gb 5 10 20 --data-type syn --verbose
-    python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 10M --data-type syn --partition
+    python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M --data-type syn --partition
+
+    python run_pipeline.py --groups benchmark --sizes 1M 10M --data-type real --partition --verbose
+    python run_pipeline.py --groups benchmark --sizes 1M 10M --data-type syn --partition --verbose
+    python run_pipeline.py --steps benchmark_dask --sizes 1M --data-type real --partition --verbose
 """
 
 import argparse
@@ -133,6 +137,10 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
     _SIZE_MAP = {
         "1M": 1_000_000, "5M": 5_000_000, "10M": 10_000_000,
         "50M": 50_000_000, "100M": 100_000_000,
+        # GB labels — row count unknown at pipeline build time;
+        # use rough estimate (10M rows/GB) only for computing _download_cap
+        "1GB":  10_000_000,  "5GB":  50_000_000,
+        "10GB": 100_000_000, "20GB": 200_000_000, "50GB": 500_000_000,
     }
     _max_needed   = max(_SIZE_MAP.get(s, 0) for s in sizes_flag)
     _download_cap = int(_max_needed * 1.2)
@@ -158,33 +166,33 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
 
     # ── FIX #1: --force and --target-ram-gb both propagated to data_generator ──
     gen_force_flag = ["--force"] if args.force else []
+    gen_partition_flag = ["--partition"] if args.partition else []
 
     if args.target_ram_gb:
+        # Generate + auto-split into benchmark_syn/<XGB>/ in one step.
+        # --split-benchmark tells data_generator to call _split_to_benchmark_syn
+        # internally, so we do NOT need a separate split_synthetic step.
         gen_cmd = _python("src/data/data_generator.py") + [
             "--target-ram-gb", *map(str, args.target_ram_gb),
-        ] + gen_force_flag                          # FIX #1: was missing --force
+            "--split-benchmark",
+            "--target-file-mb", str(args.target_file_mb),
+        ] + gen_partition_flag + gen_force_flag
+        # No separate split step needed — generator handles it
+        split_syn_cmd = None
     else:
         gen_cmd = _python("src/data/data_generator.py") + [
             "--sizes", *sizes_flag,
         ] + gen_force_flag
 
-    # ── FIX #2: split_synthetic skipped only when target_ram_gb AND no sizes ──
-    # Previously split_syn_cmd was None whenever target_ram_gb was set,
-    # even though split_synthetic is a separate step that needs to run.
-    # split_synthetic reads the already-generated file — it doesn't need
-    # --target-ram-gb itself; it uses --sizes to know which split labels to create.
-    # When using --target-ram-gb we skip auto-creating split_synthetic in the
-    # step list because the generated file name is "<X.X>GB_tier2_text_heavy"
-    # and split_dataset.py expects a row-count label. User must run split
-    # separately if needed, or we wire it up explicitly.
-    split_syn_cmd = (
-        _python("src/data/split_dataset.py") + [
-            "--source", "synthetic",
-            "--sizes", *sizes_flag,
-        ] + split_extra + _target_mb_extra
-    ) if not args.target_ram_gb else None
+        # ── FIX #2: split_synthetic skipped only when target_ram_gb AND no sizes ──
+        split_syn_cmd = (
+            _python("src/data/split_dataset.py") + [
+                "--source", "synthetic",
+                "--sizes", *sizes_flag,
+            ] + split_extra + _target_mb_extra
+        )
 
-    return [
+    _steps = [
         # ===== DATA =====
         {
             "name":        "download",
@@ -243,6 +251,19 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
         ] if split_syn_cmd else []),
 
         # ===== BENCHMARK =====
+        # _result_suffix: use "size" when running GB-label sizes so output files
+        # are named pandas_size_results.csv etc. (separate from row-count runs).
+        # Otherwise use data_type_flag ("syn" / "real").
+        # Note: _result_suffix is computed inline via a lambda-like trick so it
+        # stays inside the list literal. We pre-compute it just before.
+    ]
+
+    # Pre-compute result suffix (must be outside the list literal)
+    _is_gb_run    = args.target_ram_gb or any(s.endswith("GB") for s in sizes_flag)
+    _result_suffix = "size" if _is_gb_run else data_type_flag
+
+    return _steps + [
+        # ===== BENCHMARK =====
         {
             "name":        "benchmark_pandas",
             "group":       "benchmark",
@@ -251,7 +272,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
             "cmd": _python("benchmarks/pandas_run.py") + [
                 "--sizes",     *sizes_flag,
                 "--data-type", data_type_flag,
-                "--output",    f"pandas_{data_type_flag}_results.csv",
+                "--output",    f"pandas_{_result_suffix}_results.csv",
             ],
         },
         {
@@ -263,7 +284,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--sizes",     *sizes_flag,
                 "--data-type", data_type_flag,
                 "--mode",      "lazy",
-                "--output",    f"polars_{data_type_flag}_results.csv",
+                "--output",    f"polars_{_result_suffix}_results.csv",
             ],
         },
         {
@@ -275,7 +296,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--sizes",     *sizes_flag,
                 "--data-type", data_type_flag,
                 "--mode",      "eager",
-                "--output",    f"polars_eager_{data_type_flag}_results.csv",
+                "--output",    f"polars_eager_{_result_suffix}_results.csv",
             ],
         },
         {
@@ -288,7 +309,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--data-type",    data_type_flag,
                 "--workers",      str(args.dask_workers),
                 "--memory-limit", args.dask_memory,
-                "--output",       f"dask_{data_type_flag}_results.csv",
+                "--output",       f"dask_{_result_suffix}_results.csv",
             ],
         },
     ]
@@ -413,7 +434,8 @@ def main() -> None:
 
     data_grp = parser.add_argument_group("Data")
     data_grp.add_argument("--sizes", nargs="+", default=["1M", "10M"],
-        choices=["1M", "5M", "10M", "50M", "100M"])
+        choices=["1M", "5M", "10M", "50M", "100M",
+                 "1GB", "5GB", "10GB", "20GB", "50GB"])
     data_grp.add_argument("--data-source", choices=["auto", "real", "synthetic"], default="auto")
     data_grp.add_argument("--amazon-categories", nargs="+", default=None)
     data_grp.add_argument("--small-download", action="store_true", default=False)

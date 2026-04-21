@@ -56,6 +56,7 @@ from src.core.config import (
     CATEGORIES, N_PRODUCTS, N_USERS,
     RATING_DISTRIBUTION,
     SYNTHETIC_DIR, PROCESSED_DIR,
+    BENCHMARK_SYN_DIR,
     GENERATOR_CHUNK, PARQUET_COMPRESSION,
     BENCHMARK_SIZES, SCALABILITY_SIZES,
 )
@@ -763,17 +764,135 @@ def generate_product_metadata(
 
 
 # ─────────────────────────────────────────────────────────
+# GB-label helpers
+# ─────────────────────────────────────────────────────────
+
+def _gb_label(target_gb: float) -> str:
+    """Convert float GB to canonical label: 5.0 → '5GB', 5.5 → '5.5GB'."""
+    return f"{int(target_gb)}GB" if target_gb == int(target_gb) else f"{target_gb}GB"
+
+
+def _split_to_benchmark_syn(
+    source_path:    Path,
+    gb_label:       str,
+    partition:      bool = False,
+    target_file_mb: int  = 128,
+    force:          bool = False,
+) -> Path:
+    """
+    Copy / partition a generated synthetic file into
+    data/benchmark_syn/<XGB>/ so that benchmark runners can find it
+    using the same path convention as row-count splits.
+
+    When partition=False  → benchmark_syn/5GB/data.parquet   (single file)
+    When partition=True   → benchmark_syn/5GB/part-000.parquet ... (multi-file)
+    """
+    import gc
+    import math
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    dest_dir = BENCHMARK_SYN_DIR / gb_label
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if not partition:
+        dest_file = dest_dir / "data.parquet"
+        if dest_file.exists() and not force:
+            logger.info(f"  [{gb_label}] already exists (single-file) — skip")
+            return dest_dir
+        import shutil
+        shutil.copy2(source_path, dest_file)
+        size_mb = dest_file.stat().st_size / 1024 ** 2
+        logger.info(f"  [{gb_label}] → {dest_file} ({size_mb:.0f} MB)")
+        return dest_dir
+
+    # ── Partitioned mode ──────────────────────────────────
+    existing = list(dest_dir.glob("part-*.parquet"))
+    if existing and not force:
+        total_mb = sum(p.stat().st_size for p in existing) / 1024 ** 2
+        logger.info(
+            f"  [{gb_label}] partitions already exist "
+            f"({len(existing)} files, {total_mb:.0f} MB) — skip"
+        )
+        return dest_dir
+
+    # Estimate rows_per_partition from source file size
+    source_size  = source_path.stat().st_size
+    source_rows  = pq.read_metadata(source_path).num_rows
+    bytes_per_row = (source_size / max(source_rows, 1)) * 1.2   # 20% safety factor
+    rows_per_part = max(
+        100_000,
+        int((target_file_mb * 1024 ** 2) / bytes_per_row),
+    )
+    n_parts = math.ceil(source_rows / rows_per_part)
+    logger.info(
+        f"  [{gb_label}] partitioning {source_rows:,} rows → "
+        f"~{n_parts} files × ~{rows_per_part:,} rows (~{target_file_mb} MB each)"
+    )
+
+    pf        = pq.ParquetFile(source_path)
+    schema    = pq.read_schema(source_path)
+    writer    = None
+    part_idx  = 0
+    part_rows = 0
+    total_written = 0
+
+    try:
+        for batch in pf.iter_batches(batch_size=200_000):
+            table  = pa.Table.from_batches([batch])
+            offset = 0
+            while offset < len(table):
+                if writer is None:
+                    part_path = dest_dir / f"part-{part_idx:03d}.parquet"
+                    writer    = pq.ParquetWriter(part_path, schema, compression="snappy")
+                    part_rows = 0
+
+                space = rows_per_part - part_rows
+                take  = min(space, len(table) - offset)
+                writer.write_table(table.slice(offset, take))
+                part_rows     += take
+                total_written += take
+                offset        += take
+
+                if part_rows >= rows_per_part:
+                    writer.close()
+                    written_path = dest_dir / f"part-{part_idx:03d}.parquet"
+                    size_mb = written_path.stat().st_size / 1024 ** 2
+                    logger.info(f"    ✓ part-{part_idx:03d}.parquet | {part_rows:,} rows | {size_mb:.0f} MB")
+                    writer   = None
+                    part_idx += 1
+
+            del table
+            gc.collect()
+    finally:
+        if writer:
+            writer.close()
+            written_path = dest_dir / f"part-{part_idx:03d}.parquet"
+            size_mb = written_path.stat().st_size / 1024 ** 2
+            logger.info(f"    ✓ part-{part_idx:03d}.parquet | {part_rows:,} rows | {size_mb:.0f} MB")
+
+    total_mb = sum(p.stat().st_size for p in dest_dir.glob("part-*.parquet")) / 1024 ** 2
+    n_files  = len(list(dest_dir.glob("part-*.parquet")))
+    logger.info(f"  [{gb_label}] done → {dest_dir} | {total_written:,} rows | {n_files} files | {total_mb:.0f} MB")
+    return dest_dir
+
+
+# ─────────────────────────────────────────────────────────
 # High-level API
 # ─────────────────────────────────────────────────────────
 
 def prepare_synthetic(
-    size_label: str | None   = None,
-    target_gb:  float | None = None,
-    fmt:        str           = "parquet",
-    dest_dir:   Path          = SYNTHETIC_DIR,
-    force:      bool          = False,
-    tier:       BenchmarkTier = BenchmarkTier.TIER2,
-    workload:   Workload      = Workload.TEXT_HEAVY,
+    size_label:     str | None   = None,
+    target_gb:      float | None = None,
+    fmt:            str           = "parquet",
+    dest_dir:       Path          = SYNTHETIC_DIR,
+    force:          bool          = False,
+    tier:           BenchmarkTier = BenchmarkTier.TIER2,
+    workload:       Workload      = Workload.TEXT_HEAVY,
+    # ── NEW: split into benchmark_syn/<XGB>/ after generating ──
+    split_benchmark: bool = False,
+    partition:       bool = False,
+    target_file_mb:  int  = 128,
 ) -> Path:
     """
     Generate one synthetic dataset.
@@ -781,12 +900,15 @@ def prepare_synthetic(
     Fix #9: Accepts either size_label (rows) OR target_gb (RAM target).
     Fix #10: Tier selects data characteristics.
     Fix #7:  Workload selects which columns are included.
+
+    When target_gb is given and split_benchmark=True, the generated file is
+    also copied / partitioned into data/benchmark_syn/<XGB>/ so benchmark
+    runners can find it immediately without a separate split step.
     """
     from src.core.config import SCALABILITY_SIZES
     all_sizes = {**BENCHMARK_SIZES, **SCALABILITY_SIZES}
 
     if target_gb is not None:
-        # Fix #16: calibrate from a real sample instead of using static estimate
         target_bytes = int(target_gb * 1024 ** 3)
         n_rows, bpr  = calibrated_rows_for_size(target_bytes, tier, workload)
         size_label   = f"{target_gb:.1f}GB_{tier.value}_{workload.value}"
@@ -805,17 +927,29 @@ def prepare_synthetic(
 
     if path.exists() and not force:
         logger.info(f"Already exists: {path.name} ({get_file_size_mb(path):.1f} MB)")
-        return path
-
-    logger.info(f"Generating '{size_label}' ({n_rows:,} rows, tier={tier}, workload={workload}, {fmt}) …")
-    gen = SyntheticReviewGenerator(n_rows=n_rows, tier=tier, workload=workload)
-
-    if fmt == "parquet":
-        gen.generate_to_parquet(path)
     else:
-        gen.generate_to_csv(path)
+        logger.info(f"Generating '{size_label}' ({n_rows:,} rows, tier={tier}, workload={workload}, {fmt}) …")
+        gen = SyntheticReviewGenerator(n_rows=n_rows, tier=tier, workload=workload)
 
-    generate_product_metadata(force=force, tier=tier)
+        if fmt == "parquet":
+            gen.generate_to_parquet(path)
+        else:
+            gen.generate_to_csv(path)
+
+        generate_product_metadata(force=force, tier=tier)
+
+    # ── NEW: auto-split into benchmark_syn/<XGB>/ when requested ──
+    if target_gb is not None and split_benchmark:
+        label = _gb_label(target_gb)
+        logger.info(f"Splitting into benchmark_syn/{label}/ …")
+        _split_to_benchmark_syn(
+            source_path    = path,
+            gb_label       = label,
+            partition      = partition,
+            target_file_mb = target_file_mb,
+            force          = force,
+        )
+
     return path
 
 
@@ -856,6 +990,22 @@ if __name__ == "__main__":
     parser.add_argument("--format", choices=["parquet", "csv"], default="parquet")
     parser.add_argument("--dest",   default=str(SYNTHETIC_DIR))
     parser.add_argument("--force",  action="store_true")
+    # ── NEW: benchmark_syn split options ──
+    parser.add_argument(
+        "--split-benchmark", action="store_true",
+        help=(
+            "After generating, copy/partition file into "
+            "data/benchmark_syn/<XGB>/ (only applies with --target-ram-gb)"
+        ),
+    )
+    parser.add_argument(
+        "--partition", action="store_true",
+        help="When --split-benchmark: write multi-file partitions instead of single file",
+    )
+    parser.add_argument(
+        "--target-file-mb", type=int, default=128,
+        help="Target MB per partition file when --partition is used (default: 128)",
+    )
     args = parser.parse_args()
 
     tier     = BenchmarkTier(args.tier)
@@ -865,12 +1015,15 @@ if __name__ == "__main__":
     if args.target_ram_gb:
         for gb in args.target_ram_gb:
             prepare_synthetic(
-                target_gb = gb,
-                fmt       = args.format,
-                dest_dir  = dest,
-                force     = args.force,
-                tier      = tier,
-                workload  = workload,
+                target_gb        = gb,
+                fmt              = args.format,
+                dest_dir         = dest,
+                force            = args.force,
+                tier             = tier,
+                workload         = workload,
+                split_benchmark  = args.split_benchmark,
+                partition        = args.partition,
+                target_file_mb   = args.target_file_mb,
             )
     else:
         for label in args.sizes:

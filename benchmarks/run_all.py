@@ -162,8 +162,9 @@ Examples:
   python benchmarks/run_all.py --sizes 1M 10M --generate-data
         """,
     )
-    parser.add_argument("--sizes",       nargs="+", default=["1M", "10M"],
-                        choices=list(all_size_map.keys()))
+    parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"],
+        choices=["1M", "5M", "10M", "50M", "100M",
+                 "1GB", "5GB", "10GB", "20GB", "50GB"])
     parser.add_argument("--frameworks",  nargs="+", default=["pandas", "polars_lazy", "dask"],
                         choices=all_frameworks)
     parser.add_argument("--workloads",   nargs="+", default=WORKLOADS,
