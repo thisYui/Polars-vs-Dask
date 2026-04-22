@@ -24,6 +24,31 @@ logger = get_logger("core.benchmark")
 
 
 # ─────────────────────────────────────────────────────────
+# Row count helper
+# ─────────────────────────────────────────────────────────
+
+def _resolve_n_rows(n_rows: int | None, path: Path) -> int:
+    """
+    If n_rows is None (GB-based sizes), read the actual row count
+    from parquet metadata — fast, no data loaded into memory.
+    """
+    if n_rows is not None:
+        return n_rows
+    try:
+        if path.is_dir():
+            import pyarrow.dataset as ds
+            count = ds.dataset(path, format="parquet").count_rows()
+        else:
+            import pyarrow.parquet as pq
+            count = pq.read_metadata(path).num_rows
+        logger.info(f"  Detected {count:,} rows from parquet metadata")
+        return count
+    except Exception as exc:
+        logger.warning(f"  Could not read row count from parquet ({exc}) — using 0")
+        return 0
+
+
+# ─────────────────────────────────────────────────────────
 # Single timed run
 # ─────────────────────────────────────────────────────────
 
@@ -167,7 +192,7 @@ class BenchmarkRunner:
         workload_registry : dict mapping framework → {workload: fn}
         frameworks        : subset of frameworks to run
         workloads         : subset of workloads to run
-        sizes             : dict {label: n_rows}
+        sizes             : dict {label: n_rows}  — n_rows may be None for GB sizes
         n_runs            : timed repetitions per combo
         warmup            : warm-up runs (excluded)
         results_file      : filename inside results/raw/
@@ -212,13 +237,16 @@ class BenchmarkRunner:
         done  = 0
         t0    = time.perf_counter()
 
-        for size_label, n_rows in self.sizes.items():
+        for size_label, n_rows_cfg in self.sizes.items():
             path = get_dataset_path(size_label, self.file_format)
             if not path.exists():
                 if self.skip_missing:
                     logger.warning(f"Missing dataset '{size_label}': {path} — skipped")
                     continue
                 raise FileNotFoundError(path)
+
+            # Resolve n_rows: None means GB-based size → read from parquet metadata
+            n_rows = _resolve_n_rows(n_rows_cfg, path)
 
             logger.info(f"\n{'─'*65}")
             logger.info(f"  Dataset: {size_label}  ({n_rows:,} rows)  {path.name}")

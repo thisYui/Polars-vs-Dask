@@ -69,32 +69,37 @@ def polars_join(path: Path, lazy: bool = True) -> "pl.DataFrame":
 
 def dask_join(path: Path) -> "pd.DataFrame":
     """
-    Practical Dask Join: 
+    Practical Dask Join:
     - Manual Broadcast Join via map_partitions (prevents OOM on Windows)
-    - Column Pushdown for both tables
+    - No forced column list on reviews — let Dask infer schema from the actual
+      parquet files to avoid 'column not in index' errors when SCHEMA_COLUMNS
+      diverges from on-disk schema.
+    - Join key is always "product_id", consistent with pandas_join / polars_join.
     """
     import dask
     import dask.dataframe as dd
     import pandas as pd
     import warnings
-    from src.core.config import GROUPBY_COLUMN, SCHEMA_COLUMNS
+
+    JOIN_KEY = "product_id"
 
     # Silence scheduler warning definitively
     warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
 
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
 
-    # Pushdown: Read only columns needed for the join
-    reviews = dd.read_parquet(read_path, columns=SCHEMA_COLUMNS)
-    meta = pd.read_parquet(_ensure_metadata(), columns=[GROUPBY_COLUMN, "price", "brand"])
+    # Read without forcing a column list — schema inferred from parquet files.
+    reviews = dd.read_parquet(read_path)
 
-    # Define metadata for the output (schema info for Dask)
-    meta_out = reviews._meta.merge(meta.head(0), on=GROUPBY_COLUMN, how="left")
+    # Broadcast the small metadata table (only columns needed post-join).
+    meta = pd.read_parquet(_ensure_metadata(), columns=[JOIN_KEY, "price", "brand"])
+
+    # Define output schema for Dask map_partitions.
+    meta_out = reviews._meta.merge(meta.head(0), on=JOIN_KEY, how="left")
 
     def _local_merge(df, meta_df):
-        # Using standard merge as hash reuse via set_index is not persistent in Pandas
-        return df.merge(meta_df, on=GROUPBY_COLUMN, how="left")
+        return df.merge(meta_df, on=JOIN_KEY, how="left")
 
-    # Use the threaded scheduler for stable RSS memory management on Windows
+    # Use the threaded scheduler for stable RSS memory management on Windows.
     with dask.config.set({"dataframe.scheduler-warning": False}):
         return reviews.map_partitions(_local_merge, meta_df=meta, meta=meta_out).compute(scheduler="threads")

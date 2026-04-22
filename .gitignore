@@ -53,7 +53,7 @@ logs/
 !data/README.md
 
 # benchmark results
-results/
+results/plots
 
 # parquet
 *.parquet

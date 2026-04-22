@@ -6,7 +6,6 @@ Fixes applied (11 original + 4 new):
   #1  review_text now 300–1000 chars with high entropy
   #2  Tier system ensures apples-to-apples comparison across datasets
   #3  TEXT_MIN_LEN / TEXT_MAX_LEN config controls RAM usage
-  #4  Categorical is opt-in per tier (WITH / WITHOUT mode)
   #5  ID reuse probability is configurable (70% pool / 30% fresh)
   #6  --target-partition-rows normalises IO chunk size across datasets
   #7  Workload separation: Numeric / Join / Text-heavy
@@ -53,7 +52,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.core.config import (
-    CATEGORIES, N_PRODUCTS, N_USERS,
+    N_PRODUCTS, N_USERS,
     RATING_DISTRIBUTION,
     SYNTHETIC_DIR, PROCESSED_DIR,
     BENCHMARK_SYN_DIR,
@@ -90,7 +89,6 @@ class BenchmarkTier(str, Enum):
 
 @dataclass
 class TierConfig:
-    use_categorical:    bool  = True
     id_pool_reuse_prob: float = ID_POOL_REUSE_PROB
     text_min_len:       int   = TEXT_MIN_LEN
     text_max_len:       int   = TEXT_MAX_LEN
@@ -100,7 +98,6 @@ class TierConfig:
 
 TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
     BenchmarkTier.TIER1: TierConfig(
-        use_categorical    = True,
         id_pool_reuse_prob = 0.95,
         text_min_len       = 80,
         text_max_len       = 200,
@@ -108,7 +105,6 @@ TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
         random_insert_prob = 0.05,
     ),
     BenchmarkTier.TIER2: TierConfig(
-        use_categorical    = False,
         id_pool_reuse_prob = 0.70,
         text_min_len       = TEXT_MIN_LEN,
         text_max_len       = TEXT_MAX_LEN,
@@ -116,7 +112,6 @@ TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
         random_insert_prob = RANDOM_INSERT_PROB,
     ),
     BenchmarkTier.TIER3: TierConfig(
-        use_categorical    = False,
         id_pool_reuse_prob = 0.0,
         text_min_len       = 0,
         text_max_len       = 9999,
@@ -532,7 +527,6 @@ def calibrate_from_real(real_parquet_dir: Path) -> TierConfig:
     )
 
     return TierConfig(
-        use_categorical    = False,
         id_pool_reuse_prob = min(0.98, reuse_prob),
         text_min_len       = int(avg_len * 0.6),
         text_max_len       = int(avg_len * 1.3),
@@ -592,7 +586,6 @@ class SyntheticReviewGenerator:
         end_ts   = pd.Timestamp("2024-12-31").timestamp()
         times    = pd.to_datetime(rng.uniform(start_ts, end_ts, n), unit="s").normalize()
 
-        cats     = rng.choice(CATEGORIES, n)
         verified = (rng.random(n) < 0.80)
 
         parent_idx    = rng.integers(0, N_PRODUCTS, n)
@@ -602,12 +595,6 @@ class SyntheticReviewGenerator:
             for i, own in enumerate(is_own_parent)
         ]
 
-        category_col = (
-            pd.Categorical(cats, categories=CATEGORIES)
-            if cfg.use_categorical
-            else cats
-        )
-
         df = pd.DataFrame({
             "review_id":         review_ids,
             "user_id":           user_ids,
@@ -616,7 +603,6 @@ class SyntheticReviewGenerator:
             "rating":            ratings,
             "review_time":       times,
             "helpful_vote":      helpful_vote,
-            "category":          category_col,
             "verified_purchase": verified,
         })
 
@@ -728,7 +714,6 @@ class SyntheticReviewGenerator:
 def generate_product_metadata(
     path:  Path = None,
     force: bool = False,
-    tier:  BenchmarkTier = BenchmarkTier.TIER2,
 ) -> pd.DataFrame:
     """Generate small product metadata table used by Workload B (JOIN)."""
     from src.core.config import PRODUCT_METADATA_PATH
@@ -738,20 +723,12 @@ def generate_product_metadata(
     if path.exists() and not force:
         return pd.read_parquet(path)
 
-    cfg         = TIER_CONFIGS[tier]
     rng         = np.random.default_rng(999)
     product_ids = _IDPools.products(N_PRODUCTS)
     brands      = [f"Brand_{i}" for i in range(5000)]
 
-    category_col = (
-        pd.Categorical(rng.choice(CATEGORIES, N_PRODUCTS), categories=CATEGORIES)
-        if cfg.use_categorical
-        else rng.choice(CATEGORIES, N_PRODUCTS)
-    )
-
     df = pd.DataFrame({
         "product_id":        product_ids,
-        "category":          category_col,
         "price":             rng.uniform(5.0, 999.0, N_PRODUCTS).round(2),
         "brand":             rng.choice(brands, N_PRODUCTS),
         "avg_rating_global": rng.uniform(1.0, 5.0, N_PRODUCTS).round(2),
@@ -936,7 +913,7 @@ def prepare_synthetic(
         else:
             gen.generate_to_csv(path)
 
-        generate_product_metadata(force=force, tier=tier)
+        generate_product_metadata(force=force)
 
     # ── NEW: auto-split into benchmark_syn/<XGB>/ when requested ──
     if target_gb is not None and split_benchmark:

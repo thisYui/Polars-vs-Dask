@@ -5,6 +5,7 @@ Master runner: executes the full benchmark matrix across all frameworks.
 Usage:
     python benchmarks/run_all.py
     python benchmarks/run_all.py --sizes 1M 10M
+    python benchmarks/run_all.py --sizes 5GB --data-type syn
     python benchmarks/run_all.py --frameworks pandas polars
     python benchmarks/run_all.py --workloads filter groupby
     python benchmarks/run_all.py --generate-data   # auto-generate datasets first
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 import argparse
 
 from src.core.config import (
-    BENCHMARK_SIZES, SCALABILITY_SIZES,
+    BENCHMARK_SIZES, SCALABILITY_SIZES, GB_SIZES,
     BENCHMARK_RUNS, WARMUP_RUNS,
     WORKLOADS, FRAMEWORKS,
     DASK_N_WORKERS, DASK_THREADS_PER_WORKER, DASK_MEMORY_LIMIT,
@@ -33,6 +34,9 @@ from src.utils import get_logger, print_system_info, merge_result_files
 from src.workloads import WORKLOAD_REGISTRY
 
 logger = get_logger("run_all")
+
+# All valid sizes across all dicts (n_rows may be None for GB sizes)
+ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES}
 
 # Per-framework result filenames
 RESULT_FILES = {
@@ -80,7 +84,7 @@ def _stop_dask(cluster, client):
 # ─────────────────────────────────────────────────────────
 
 def main(
-    sizes:        dict[str, int],
+    sizes:        dict[str, int | None],
     frameworks:   list[str],
     workloads:    list[str],
     n_runs:       int  = BENCHMARK_RUNS,
@@ -91,6 +95,7 @@ def main(
     dask_threads: int  = DASK_THREADS_PER_WORKER,
     dask_memory:  str  = DASK_MEMORY_LIMIT,
     generate_data: bool = False,
+    data_type:    str  = "real",
 ) -> None:
     t0 = time.perf_counter()
 
@@ -105,7 +110,6 @@ def main(
 
     try:
         # ── Build per-framework sub-registries ────────────
-        # Filter registry to only requested frameworks & workloads
         sub_registry = {
             fw: {wl: fn for wl, fn in WORKLOAD_REGISTRY[fw].items() if wl in workloads}
             for fw in frameworks
@@ -116,7 +120,7 @@ def main(
             workload_registry=sub_registry,
             frameworks=frameworks,
             workloads=workloads,
-            sizes=sizes,
+            sizes=sizes,          # n_rows may be None for GB sizes — BenchmarkRunner handles it
             n_runs=n_runs,
             warmup=warmup,
             results_file=results_file,
@@ -141,8 +145,8 @@ def main(
 # ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    all_size_map  = {**BENCHMARK_SIZES, **SCALABILITY_SIZES}
-    all_frameworks = list(WORKLOAD_REGISTRY.keys())
+    all_size_choices  = list(ALL_SIZE_MAP.keys())
+    all_frameworks    = list(WORKLOAD_REGISTRY.keys())
 
     parser = argparse.ArgumentParser(
         description="Full benchmark matrix: Pandas vs Polars vs Dask",
@@ -155,6 +159,9 @@ Examples:
   # Full benchmark
   python benchmarks/run_all.py --sizes 1M 10M 100M
 
+  # GB-based size (synthetic data)
+  python benchmarks/run_all.py --sizes 5GB --data-type syn
+
   # Pandas + Polars only, filter and groupby only
   python benchmarks/run_all.py --frameworks pandas polars --workloads filter groupby
 
@@ -162,9 +169,8 @@ Examples:
   python benchmarks/run_all.py --sizes 1M 10M --generate-data
         """,
     )
-    parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"],
-        choices=["1M", "5M", "10M", "50M", "100M",
-                 "1GB", "5GB", "10GB", "20GB", "50GB"])
+    parser.add_argument("--sizes",       nargs="+", default=["1M", "10M"],
+                        choices=all_size_choices)
     parser.add_argument("--frameworks",  nargs="+", default=["pandas", "polars_lazy", "dask"],
                         choices=all_frameworks)
     parser.add_argument("--workloads",   nargs="+", default=WORKLOADS,
@@ -178,6 +184,7 @@ Examples:
     parser.add_argument("--dask-memory", default=DASK_MEMORY_LIMIT)
     parser.add_argument("--generate-data", action="store_true",
                         help="Generate datasets before running benchmarks")
+    parser.add_argument("--data-type",   choices=["real", "syn"], default="real")
     parser.add_argument("--sysinfo",     action="store_true",
                         help="Print system info and exit")
     args = parser.parse_args()
@@ -186,7 +193,8 @@ Examples:
         print_system_info()
         sys.exit(0)
 
-    sizes = {k: all_size_map[k] for k in args.sizes}
+    # Build sizes dict — GB sizes have None as value (resolved at runtime from parquet metadata)
+    sizes = {k: ALL_SIZE_MAP[k] for k in args.sizes}
 
     main(
         sizes=sizes,
@@ -200,4 +208,5 @@ Examples:
         dask_threads=args.dask_threads,
         dask_memory=args.dask_memory,
         generate_data=args.generate_data,
+        data_type=args.data_type,
     )

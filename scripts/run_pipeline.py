@@ -42,11 +42,12 @@ Usage:
     python run_pipeline.py --steps preprocess --partition --verbose
     python run_pipeline.py --steps split_real --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M --data-type syn --partition --verbose
-    python run_pipeline.py --steps generate_synthetic --target-ram-gb 5 10 20 --data-type syn --verbose
-    python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M --data-type syn --partition
+    python run_pipeline.py --steps generate_synthetic --target-ram-gb 5 10 20 --data-type syn --partition --verbose
 
-    python run_pipeline.py --groups benchmark --sizes 1M 10M --data-type real --partition --verbose
-    python run_pipeline.py --groups benchmark --sizes 1M 10M --data-type syn --partition --verbose
+    python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type real --partition --verbose
+    python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type syn --partition --verbose
+    python run_pipeline.py --groups benchmark --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+
     python run_pipeline.py --steps benchmark_dask --sizes 1M --data-type real --partition --verbose
 """
 

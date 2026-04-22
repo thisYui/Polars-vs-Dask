@@ -89,7 +89,6 @@ SCHEMA_COLUMNS = [
     "review_text",      # full review body
     "review_time",      # datetime (normalised to date)
     "helpful_vote",     # int32  number of helpful votes
-    "category",         # string  e.g. "Electronics"
     "verified_purchase",# bool
 ]
 
@@ -118,10 +117,6 @@ AMAZON_FIELD_MAP = {
 # Synthetic generation cardinality
 N_USERS    = 500_000
 N_PRODUCTS = 100_000
-CATEGORIES = [
-    "Electronics", "Books", "Clothing", "Home & Kitchen",
-    "Sports", "Toys", "Automotive", "Health", "Beauty", "Tools",
-]
 RATING_DISTRIBUTION = [0.05, 0.05, 0.10, 0.30, 0.50]   # 1–5 stars
 
 # ─────────────────────────────────────────────────────────
