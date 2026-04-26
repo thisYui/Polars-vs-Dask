@@ -30,7 +30,8 @@ env/
 Thumbs.db
 
 # Data (large files)
-data/benchmark/
+data/benchmark_syn/
+data/benchmark_real/
 data/raw/
 data/processed/
 data/synthetic
