@@ -2,6 +2,10 @@
 benchmarks/run_all.py
 Master runner: executes the full benchmark matrix across all frameworks.
 
+Can be driven in two ways:
+  1. Programmatically via ExperimentConfig (called from run_pipeline.py)
+  2. CLI (backward-compatible with the original interface)
+
 Usage:
     python benchmarks/run_all.py
     python benchmarks/run_all.py --sizes 1M 10M
@@ -10,9 +14,15 @@ Usage:
     python benchmarks/run_all.py --workloads filter groupby
     python benchmarks/run_all.py --generate-data   # auto-generate datasets first
     python benchmarks/run_all.py --sysinfo         # print system info and exit
+
+    # Config-driven (used by run_pipeline.py):
+    python benchmarks/run_all.py --config logical
+    python benchmarks/run_all.py --config physical
+    python benchmarks/run_all.py --config validation
 """
 
 import gc
+import json
 import sys
 import time
 from pathlib import Path
@@ -35,21 +45,19 @@ from src.workloads import WORKLOAD_REGISTRY
 
 logger = get_logger("run_all")
 
-# All valid sizes across all dicts (n_rows may be None for GB sizes)
 ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES}
 
-# Per-framework result filenames
 RESULT_FILES = {
-    "pandas":       "pandas_results.csv",
-    "polars":       "polars_results.csv",
-    "polars_lazy":  "polars_results.csv",
-    "polars_eager": "polars_eager_results.csv",
-    "dask":         "dask_results.csv",
+    "pandas":        "pandas_results.csv",
+    "polars":        "polars_results.csv",
+    "polars_lazy":   "polars_results.csv",
+    "polars_eager":  "polars_eager_results.csv",
+    "dask":          "dask_results.csv",
 }
 
 
 # ─────────────────────────────────────────────────────────
-# Optional: start Dask cluster for the run
+# Dask cluster helpers
 # ─────────────────────────────────────────────────────────
 
 def _maybe_start_dask(frameworks, n_workers, threads, memory_limit):
@@ -80,36 +88,97 @@ def _stop_dask(cluster, client):
 
 
 # ─────────────────────────────────────────────────────────
-# Main
+# Config snapshot helper
+# ─────────────────────────────────────────────────────────
+
+def _save_config_snapshot(cfg_dict: dict) -> None:
+    """Persist the run configuration to results/configs/run_config.json."""
+    out = Path("results/configs")
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "run_config.json", "w", encoding="utf-8") as fh:
+        json.dump(cfg_dict, fh, indent=2, default=str)
+    logger.info("Config snapshot → results/configs/run_config.json")
+
+
+# ─────────────────────────────────────────────────────────
+# Core runner  (accepts ExperimentConfig OR raw kwargs)
 # ─────────────────────────────────────────────────────────
 
 def main(
-    sizes:        dict[str, int | None],
-    frameworks:   list[str],
-    workloads:    list[str],
-    n_runs:       int  = BENCHMARK_RUNS,
-    warmup:       int  = WARMUP_RUNS,
-    file_format:  str  = "parquet",
-    results_file: str  = "all_results.csv",
-    dask_workers: int  = DASK_N_WORKERS,
-    dask_threads: int  = DASK_THREADS_PER_WORKER,
-    dask_memory:  str  = DASK_MEMORY_LIMIT,
+    cfg=None,
+    *,
+    # Legacy keyword args kept for direct-call backward compat
+    sizes=None,
+    frameworks=None,
+    workloads=None,
+    n_runs:        int  = BENCHMARK_RUNS,
+    warmup:        int  = WARMUP_RUNS,
+    file_format:   str  = "parquet",
+    results_file:  str  = "all_results.csv",
+    dask_workers:  int  = DASK_N_WORKERS,
+    dask_threads:  int  = DASK_THREADS_PER_WORKER,
+    dask_memory:   str  = DASK_MEMORY_LIMIT,
     generate_data: bool = False,
-    data_type:    str  = "real",
+    data_type:     str  = "real",
 ) -> None:
+    """
+    Run the full benchmark matrix.
+
+    Config-driven (recommended):
+        from src.core.experiment_config import load_experiment_config
+        main(load_experiment_config("logical"))
+
+    Legacy keyword args (backward-compatible):
+        main(sizes={"1M": 1_000_000}, frameworks=["pandas"], ...)
+    """
+    # ── Resolve parameters from cfg or kwargs ─────────────
+    if cfg is not None:
+        from src.core.experiment_config import ExperimentConfig
+        if not isinstance(cfg, ExperimentConfig):
+            raise TypeError(f"cfg must be an ExperimentConfig, got {type(cfg)}")
+
+        size_labels = cfg.size_labels()
+        sizes_dict  = {lbl: ALL_SIZE_MAP.get(lbl) for lbl in size_labels}
+        frameworks  = cfg.frameworks
+        workloads   = cfg.workloads
+        n_runs      = cfg.repeat
+        warmup      = cfg.warmup
+        # data_type: use first entry; logical/validation may list both
+        data_type   = cfg.data_types[0] if cfg.data_types else "real"
+
+        _snapshot = {**cfg.__dict__, "resolved_size_labels": size_labels}
+
+    else:
+        # Legacy path — caller passed explicit kwargs
+        if sizes is None:
+            raise ValueError("Provide either cfg= or sizes=")
+        sizes_dict = sizes
+        frameworks = frameworks or list(WORKLOAD_REGISTRY.keys())
+        workloads  = workloads  or WORKLOADS
+        _snapshot  = dict(
+            sizes=list(sizes_dict.keys()),
+            frameworks=frameworks,
+            workloads=workloads,
+            n_runs=n_runs,
+            warmup=warmup,
+            data_type=data_type,
+        )
+
     t0 = time.perf_counter()
+
+    # ── Config snapshot ───────────────────────────────────
+    _save_config_snapshot(_snapshot)
 
     # ── Optional data generation ──────────────────────────
     if generate_data:
         logger.info("Generating benchmark datasets …")
         from src.data.split_dataset import prepare_benchmark_splits
-        prepare_benchmark_splits(source="auto", sizes=sizes)
+        prepare_benchmark_splits(source="auto", sizes=sizes_dict)
 
     # ── Dask cluster ──────────────────────────────────────
     cluster, client = _maybe_start_dask(frameworks, dask_workers, dask_threads, dask_memory)
 
     try:
-        # ── Build per-framework sub-registries ────────────
         sub_registry = {
             fw: {wl: fn for wl, fn in WORKLOAD_REGISTRY[fw].items() if wl in workloads}
             for fw in frameworks
@@ -120,7 +189,7 @@ def main(
             workload_registry=sub_registry,
             frameworks=frameworks,
             workloads=workloads,
-            sizes=sizes,          # n_rows may be None for GB sizes — BenchmarkRunner handles it
+            sizes=sizes_dict,
             n_runs=n_runs,
             warmup=warmup,
             results_file=results_file,
@@ -131,7 +200,7 @@ def main(
     finally:
         _stop_dask(cluster, client)
 
-    # ── Merge individual files if they exist ──────────────
+    # ── Merge individual result files ─────────────────────
     individual_files = [RESULT_FILES[fw] for fw in frameworks if fw in RESULT_FILES]
     merged = merge_result_files(*individual_files, output=results_file)
     if not merged.empty:
@@ -145,15 +214,19 @@ def main(
 # ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    all_size_choices  = list(ALL_SIZE_MAP.keys())
-    all_frameworks    = list(WORKLOAD_REGISTRY.keys())
+    all_size_choices = list(ALL_SIZE_MAP.keys())
+    all_frameworks   = list(WORKLOAD_REGISTRY.keys())
 
     parser = argparse.ArgumentParser(
         description="Full benchmark matrix: Pandas vs Polars vs Dask",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Quick run (1M rows, all frameworks, all workloads)
+  # Config-driven (recommended — reads configs/<n>.yaml)
+  python benchmarks/run_all.py --config logical
+  python benchmarks/run_all.py --config physical
+
+  # Quick manual run
   python benchmarks/run_all.py --sizes 1M
 
   # Full benchmark
@@ -162,30 +235,40 @@ Examples:
   # GB-based size (synthetic data)
   python benchmarks/run_all.py --sizes 5GB --data-type syn
 
-  # Pandas + Polars only, filter and groupby only
+  # Pandas + Polars only
   python benchmarks/run_all.py --frameworks pandas polars --workloads filter groupby
 
-  # Generate data automatically then benchmark
+  # Auto-generate data then benchmark
   python benchmarks/run_all.py --sizes 1M 10M --generate-data
         """,
     )
-    parser.add_argument("--sizes",       nargs="+", default=["1M", "10M"],
+
+    # ── Config-driven flag ────────────────────────────────
+    parser.add_argument(
+        "--config",
+        metavar="NAME",
+        default=None,
+        help="Load experiment from configs/<n>.yaml  (logical | physical | validation). "
+             "When set, --sizes / --frameworks / --workloads / --runs / --warmup are ignored.",
+    )
+
+    # ── Legacy / manual flags (backward-compat) ───────────
+    parser.add_argument("--sizes",        nargs="+", default=["1M", "10M"],
                         choices=all_size_choices)
-    parser.add_argument("--frameworks",  nargs="+", default=["pandas", "polars_lazy", "dask"],
+    parser.add_argument("--frameworks",   nargs="+",
+                        default=["pandas", "polars_lazy", "dask"],
                         choices=all_frameworks)
-    parser.add_argument("--workloads",   nargs="+", default=WORKLOADS,
-                        choices=WORKLOADS)
-    parser.add_argument("--runs",        type=int,  default=BENCHMARK_RUNS)
-    parser.add_argument("--warmup",      type=int,  default=WARMUP_RUNS)
-    parser.add_argument("--format",      choices=["parquet", "csv"], default="parquet")
-    parser.add_argument("--output",      default="all_results.csv")
-    parser.add_argument("--dask-workers",type=int,  default=DASK_N_WORKERS)
-    parser.add_argument("--dask-threads",type=int,  default=DASK_THREADS_PER_WORKER)
-    parser.add_argument("--dask-memory", default=DASK_MEMORY_LIMIT)
-    parser.add_argument("--generate-data", action="store_true",
-                        help="Generate datasets before running benchmarks")
-    parser.add_argument("--data-type",   choices=["real", "syn"], default="real")
-    parser.add_argument("--sysinfo",     action="store_true",
+    parser.add_argument("--workloads",    nargs="+", default=WORKLOADS, choices=WORKLOADS)
+    parser.add_argument("--runs",         type=int,  default=BENCHMARK_RUNS)
+    parser.add_argument("--warmup",       type=int,  default=WARMUP_RUNS)
+    parser.add_argument("--format",       choices=["parquet", "csv"], default="parquet")
+    parser.add_argument("--output",       default="all_results.csv")
+    parser.add_argument("--dask-workers", type=int,  default=DASK_N_WORKERS)
+    parser.add_argument("--dask-threads", type=int,  default=DASK_THREADS_PER_WORKER)
+    parser.add_argument("--dask-memory",  default=DASK_MEMORY_LIMIT)
+    parser.add_argument("--generate-data", action="store_true")
+    parser.add_argument("--data-type",    choices=["real", "syn"], default="real")
+    parser.add_argument("--sysinfo",      action="store_true",
                         help="Print system info and exit")
     args = parser.parse_args()
 
@@ -193,20 +276,27 @@ Examples:
         print_system_info()
         sys.exit(0)
 
-    # Build sizes dict — GB sizes have None as value (resolved at runtime from parquet metadata)
-    sizes = {k: ALL_SIZE_MAP[k] for k in args.sizes}
+    # Config-driven path
+    if args.config:
+        from src.core.experiment_config import load_experiment_config
+        _cfg = load_experiment_config(args.config)
+        logger.info(f"Loaded experiment config: {_cfg}")
+        main(cfg=_cfg, results_file=args.output, file_format=args.format)
 
-    main(
-        sizes=sizes,
-        frameworks=args.frameworks,
-        workloads=args.workloads,
-        n_runs=args.runs,
-        warmup=args.warmup,
-        file_format=args.format,
-        results_file=args.output,
-        dask_workers=args.dask_workers,
-        dask_threads=args.dask_threads,
-        dask_memory=args.dask_memory,
-        generate_data=args.generate_data,
-        data_type=args.data_type,
-    )
+    # Legacy manual path
+    else:
+        _sizes = {k: ALL_SIZE_MAP[k] for k in args.sizes}
+        main(
+            sizes=_sizes,
+            frameworks=args.frameworks,
+            workloads=args.workloads,
+            n_runs=args.runs,
+            warmup=args.warmup,
+            file_format=args.format,
+            results_file=args.output,
+            dask_workers=args.dask_workers,
+            dask_threads=args.dask_threads,
+            dask_memory=args.dask_memory,
+            generate_data=args.generate_data,
+            data_type=args.data_type,
+        )

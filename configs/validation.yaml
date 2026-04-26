@@ -1,0 +1,22 @@
+track: validation
+
+sizes:
+  - 10000000
+
+frameworks:
+  - pandas
+  - polars
+  - dask
+
+workloads:
+  - filter
+  - groupby
+  - join
+  - pipeline
+
+data_types:
+  - real
+  - synthetic
+
+repeat: 3
+warmup: 1

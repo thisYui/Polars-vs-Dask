@@ -1,0 +1,21 @@
+track: physical
+
+sizes:
+  - 1GB
+  - 5GB
+  - 20GB
+
+frameworks:
+  - pandas
+  - polars
+  - dask
+
+workloads:
+  - filter
+  - groupby
+
+data_types:
+  - synthetic
+
+repeat: 3
+warmup: 1

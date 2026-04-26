@@ -61,6 +61,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Lazy import — only needed when benchmark_all step runs in-process.
+# Importing here avoids a hard dependency at pipeline startup.
+def _load_experiment_config(name: str):
+    from src.core.experiment_config import load_experiment_config
+    return load_experiment_config(name)
+
+def _run_all_via_config(cfg_name: str, results_file: str = "all_results.csv") -> None:
+    """Run the full benchmark matrix in-process using an ExperimentConfig."""
+    cfg = _load_experiment_config(cfg_name)
+    from benchmarks.run_all import main as run_all_main
+    run_all_main(cfg, results_file=results_file)
+
 # ─────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────
@@ -263,7 +275,24 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
     _is_gb_run    = args.target_ram_gb or any(s.endswith("GB") for s in sizes_flag)
     _result_suffix = "size" if _is_gb_run else data_type_flag
 
-    return _steps + [
+    # ── benchmark_all: config-driven in-process run ───────
+    # Determines which YAML to load from the sizes being requested.
+    _has_gb_sizes = args.target_ram_gb or any(s.endswith("GB") for s in sizes_flag)
+    _cfg_name     = "physical" if _has_gb_sizes else (
+                    "validation" if len(sizes_flag) == 1 else "logical"
+                  )
+
+    benchmark_all_step = {
+        "name":        "benchmark_all",
+        "group":       "benchmark",
+        "description": f"Run full benchmark matrix via ExperimentConfig ({_cfg_name}.yaml)",
+        "required":    True,
+        # cmd is a sentinel — run_step() detects "benchmark_all" and calls in-process
+        "cmd":         ["__inprocess__", "benchmark_all", _cfg_name,
+                        f"all_{_result_suffix}_results.csv"],
+    }
+
+    return _steps + [benchmark_all_step] + [
         # ===== BENCHMARK =====
         {
             "name":        "benchmark_pandas",
@@ -352,6 +381,32 @@ def run_step(step: dict, dry_run: bool = False, verbose: bool = False) -> bool:
     logger.info("─" * 60)
     logger.info(f"  STEP : {name}")
     logger.info(f"  DESC : {step['description']}")
+
+    # ── In-process sentinel ───────────────────────────────
+    # benchmark_all runs directly in this process (no subprocess overhead,
+    # no serialisation of results between processes).
+    if cmd and cmd[0] == "__inprocess__":
+        _, step_type, cfg_name, results_file = cmd
+        logger.info(f"  MODE : in-process (ExperimentConfig={cfg_name}.yaml)")
+        logger.info("─" * 60)
+
+        if dry_run:
+            logger.info("  [DRY RUN] — skipping execution")
+            return True
+
+        t0 = time.perf_counter()
+        try:
+            _run_all_via_config(cfg_name, results_file=results_file)
+            logger.info(f"  ✓ Done in {_fmt(time.perf_counter() - t0)}")
+            return True
+        except Exception as exc:
+            logger.error(f"  ✗ FAILED after {_fmt(time.perf_counter() - t0)}: {exc}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+            return False
+
+    # ── Subprocess path (all other steps) ────────────────
     logger.info(f"  CMD  : {' '.join(str(c) for c in cmd)}")
     logger.info("─" * 60)
 
