@@ -1,7 +1,24 @@
 """
 src/core/config.py
-Central configuration — single source of truth for all parameters.
-Machine: Windows, 16 GB RAM.
+
+Central configuration — single source of truth for all project parameters.
+
+This version is calibrated from the real Amazon Reviews 1M sample.
+
+Calibration basis:
+- Dataset: real/1M
+- Item key: parent_asin
+- Rows: 1,000,000
+- Unique users: 119,926
+- Unique parent_asin items: 476,112
+- Rating distribution: empirical from real data
+- Text length: log-normal reference fitted from real data
+
+Text length calibration notes (from 01b_calibrate_synthetic.ipynb):
+- TEXT_MIN_LEN = p5  of real text_len = 12  chars  (loại bỏ review quá ngắn)
+- TEXT_MAX_LEN = p85 of real text_len = 374 chars  (kiểm soát RAM, tránh extreme outlier)
+- TEXT_GENERATOR_MAX_LEN = p99 of real text_len = 1_234 chars for realistic validation
+- Log-normal distribution là model phù hợp (skewness ≈ 4.7, kurtosis ≈ 55)
 """
 
 from pathlib import Path
@@ -9,175 +26,235 @@ from pathlib import Path
 # ─────────────────────────────────────────────────────────
 # Project Root & Directory Layout
 # ─────────────────────────────────────────────────────────
+
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent   # bigdata-pandas-polars-dask/
 
-DATA_DIR        = ROOT_DIR / "data"
-RAW_DIR         = DATA_DIR / "raw"          # downloaded Amazon gz/json
-PROCESSED_DIR   = DATA_DIR / "processed"   # parquet after clean
-SYNTHETIC_DIR   = DATA_DIR / "synthetic"   # fully synthetic datasets
-BENCHMARK_DIR   = DATA_DIR / "benchmark"   # ready-to-use splits (1M/10M/50M)
-BENCHMARK_REAL_DIR   = DATA_DIR / "benchmark_real"   # ready-to-use splits (1M/10M/50M)
-BENCHMARK_SYN_DIR   = DATA_DIR / "benchmark_syn"   # ready-to-use splits (1M/10M/50M)
+DATA_DIR = ROOT_DIR / "data"
 
-RESULTS_DIR     = ROOT_DIR / "results"
+RAW_DIR = DATA_DIR / "raw"                 # downloaded Amazon gz/json
+PROCESSED_DIR = DATA_DIR / "processed"     # parquet after clean
+SYNTHETIC_DIR = DATA_DIR / "synthetic"     # fully synthetic datasets
+
+BENCHMARK_DIR = DATA_DIR / "benchmark"
+BENCHMARK_REAL_DIR = DATA_DIR / "benchmark_real"
+BENCHMARK_SYN_DIR = DATA_DIR / "benchmark_syn"
+
+RESULTS_DIR = ROOT_DIR / "results"
 RAW_RESULTS_DIR = RESULTS_DIR / "raw"
-TABLES_DIR      = RESULTS_DIR / "tables"
-PLOTS_DIR       = RESULTS_DIR / "plots"
+TABLES_DIR = RESULTS_DIR / "tables"
+PLOTS_DIR = RESULTS_DIR / "plots"
 
-LOG_DIR         = ROOT_DIR / "logs"
+LOG_DIR = ROOT_DIR / "logs"
 
-# Auto-create all directories
 for _d in [
-    RAW_DIR, PROCESSED_DIR, SYNTHETIC_DIR, BENCHMARK_REAL_DIR,
-    BENCHMARK_SYN_DIR, RAW_RESULTS_DIR, TABLES_DIR, PLOTS_DIR, LOG_DIR,
+    RAW_DIR,
+    PROCESSED_DIR,
+    SYNTHETIC_DIR,
+    BENCHMARK_REAL_DIR,
+    BENCHMARK_SYN_DIR,
+    RAW_RESULTS_DIR,
+    TABLES_DIR,
+    PLOTS_DIR,
+    LOG_DIR,
 ]:
     _d.mkdir(parents=True, exist_ok=True)
+
 
 # ─────────────────────────────────────────────────────────
 # Machine Profile
 # ─────────────────────────────────────────────────────────
-MACHINE_RAM_GB      = 16     # Physical RAM (GB)
-RAM_THRESHOLD_GB    = 12     # Datasets above this → "larger than RAM" regime
+
+MACHINE_RAM_GB = 16
+RAM_THRESHOLD_GB = 12
+
 
 # ─────────────────────────────────────────────────────────
-# Benchmark Split Sizes  (rows)
+# Benchmark Split Sizes
 # ─────────────────────────────────────────────────────────
+
 BENCHMARK_SIZES = {
-    "1M":   1_000_000,
-    "10M":  10_000_000,
+    "1M": 1_000_000,
+    "10M": 10_000_000,
     "100M": 100_000_000,
 }
 
-# Extended sizes for scalability analysis
 SCALABILITY_SIZES = {
-    "1M":   1_000_000,
-    "5M":   5_000_000,
-    "10M":  10_000_000,
-    "50M":  50_000_000,
+    "1M": 1_000_000,
+    "5M": 5_000_000,
+    "10M": 10_000_000,
+    "50M": 50_000_000,
     "100M": 100_000_000,
 }
 
-# GB-based sizes for --target-ram-gb workflow.
-# Row count is None because the actual count depends on calibrated bytes/row
-# and is only known after generation. The benchmark runners detect row count
-# at runtime via parquet metadata instead of a static lookup.
 GB_SIZES: dict[str, None] = {
-    "1GB":  None,
-    "5GB":  None,
+    "1GB": None,
+    "5GB": None,
     "10GB": None,
     "20GB": None,
     "50GB": None,
 }
 
-# All valid size labels (row-count + GB-based)
 ALL_SIZE_LABELS: list[str] = list({
     **BENCHMARK_SIZES,
     **SCALABILITY_SIZES,
-    **{k: 0 for k in GB_SIZES},   # 0 used as a sentinel; real value detected at runtime
+    **{k: 0 for k in GB_SIZES},
 }.keys())
 
+
 # ─────────────────────────────────────────────────────────
-# Dataset Schema  (Amazon Reviews)
+# Dataset Schema — Amazon Reviews
 # ─────────────────────────────────────────────────────────
+
 SCHEMA_COLUMNS = [
-    "review_id",        # R + 10 digits  (synthetic) / hash(user+product) (real)
-    "user_id",          # 28-char alphanumeric
-    "product_id",       # ASIN  e.g. B096S6LZV4
-    "parent_asin",      # parent product ASIN (groups variants)
-    "rating",           # int8  1-5
-    "review_title",     # short title of the review
-    "review_text",      # full review body
-    "review_time",      # datetime (normalised to date)
-    "helpful_vote",     # int32  number of helpful votes
-    "verified_purchase",# bool
+    "review_id",
+    "user_id",
+    "product_id",
+    "parent_asin",
+    "rating",
+    "review_title",
+    "review_text",
+    "review_time",
+    "helpful_vote",
+    "verified_purchase",
 ]
 
-# Real Amazon JSON (2023 HuggingFace format) → internal field mapping
-# Fields present in the HF dataset:
-#   rating, title, text, images, asin, parent_asin,
-#   user_id, timestamp (ms), helpful_vote, verified_purchase
 AMAZON_FIELD_MAP = {
-    # HuggingFace 2023 format
-    "asin":          "product_id",
-    "parent_asin":   "parent_asin",
-    "title":         "review_title",
-    "text":          "review_text",
-    "timestamp":     "review_time",   # milliseconds epoch → handled in _cast_chunk
-    "helpful_vote":  "helpful_vote",
+    "asin": "product_id",
+    "parent_asin": "parent_asin",
+    "title": "review_title",
+    "text": "review_text",
+    "timestamp": "review_time",
+    "helpful_vote": "helpful_vote",
     "verified_purchase": "verified_purchase",
-    # Legacy UCSD format (kept for backward compat)
-    "reviewerID":    "user_id",
-    "reviewText":    "review_text",
-    "overall":       "rating",
-    "unixReviewTime":"review_time",
-    "summary":       "review_title",
-    "verified":      "verified_purchase",
+
+    # Legacy UCSD format
+    "reviewerID": "user_id",
+    "reviewText": "review_text",
+    "overall": "rating",
+    "unixReviewTime": "review_time",
+    "summary": "review_title",
+    "verified": "verified_purchase",
 }
 
-# Synthetic generation cardinality
-N_USERS    = 500_000
-N_PRODUCTS = 100_000
-RATING_DISTRIBUTION = [0.05, 0.05, 0.10, 0.30, 0.50]   # 1–5 stars
+
+# ─────────────────────────────────────────────────────────
+# Calibrated Real-Data Parameters
+# ─────────────────────────────────────────────────────────
+
+CALIBRATED_FROM = "real/1M"
+CALIBRATED_ROWS = 1_000_000
+
+CALIBRATED_UNIQUE_USERS = 119_926
+CALIBRATED_UNIQUE_PRODUCT_IDS = 771_319
+CALIBRATED_UNIQUE_PARENT_ASINS = 476_112
+
+ITEM_KEY_COLUMN = "parent_asin"
+
+N_USERS = CALIBRATED_UNIQUE_USERS
+N_PRODUCTS = CALIBRATED_UNIQUE_PARENT_ASINS
+N_PRODUCT_IDS = CALIBRATED_UNIQUE_PRODUCT_IDS
+
+# Text length calibration.
+# The realistic generator uses log-normal text lengths. p85 remains available
+# for memory-constrained tiers; p99 is used by tier2 to preserve the real tail.
+TEXT_MIN_LEN = 12     # p5  of real/1M — loại bỏ review quá ngắn
+TEXT_MAX_LEN = 374    # p85 of real/1M — memory-constrained cap
+TEXT_GENERATOR_MAX_LEN = 1_234  # p99 of real/1M — realistic validation cap
+
+TEXT_VARIANTS = 2_000
+RANDOM_INSERT_PROB = 0.02
+
+TEXT_LEN_LOGNORMAL_MU = 4.7013
+TEXT_LEN_LOGNORMAL_SIGMA = 1.1979
+TEXT_LEN_P50 = 122
+TEXT_LEN_P25 = 51
+TEXT_LEN_P75 = 259
+TEXT_LEN_P85 = 374
+TEXT_LEN_P90 = 472
+TEXT_LEN_P95 = 654
+TEXT_LEN_P99 = 1_234
+TEXT_LEN_QUANTILE_POINTS = [0.05, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+TEXT_LEN_QUANTILE_VALUES = [12, 51, 122, 259, 472, 654, 1_234]
+
+ID_POOL_REUSE_PROB = 0.8801
+PARENT_ASIN_REUSE_PROB = 0.5239
+USER_SINGLE_REVIEW_PCT = 0.2183
+
+USER_ZIPF_ALPHA = 0.5500
+PARENT_ASIN_ZIPF_ALPHA = 0.7012
+
+REAL_MEMORY_BYTES_PER_ROW = 683.9
+
+RATING_DISTRIBUTION = [0.0579, 0.0504, 0.0909, 0.1629, 0.6379]
+
+# helpful_vote is zero-heavy but has a right tail.
+# Target reference from real: p90≈2, p95≈4, p99≈16.
+HELPFUL_ZERO_PROB = 0.75
+HELPFUL_LOGNORMAL_MEAN = 0.70
+HELPFUL_LOGNORMAL_SIGMA = 1.15
+HELPFUL_MAX = 1_000
+
 
 # ─────────────────────────────────────────────────────────
 # Benchmark Run Settings
 # ─────────────────────────────────────────────────────────
-WARMUP_RUNS     = 1     # excluded from measurements
-BENCHMARK_RUNS  = 3     # timed repetitions → averaged
-TIMEOUT_SECONDS = 600   # per workload (10 min)
+
+WARMUP_RUNS = 1
+BENCHMARK_RUNS = 3
+TIMEOUT_SECONDS = 600
+
 
 # ─────────────────────────────────────────────────────────
 # Workload Parameters
 # ─────────────────────────────────────────────────────────
+
 WORKLOADS = ["filter", "groupby", "join", "pipeline"]
 
-FILTER_RATING_THRESHOLD = 4          # rating >= 4
-GROUPBY_COLUMN          = "product_id"
-PRODUCT_METADATA_PATH   = PROCESSED_DIR / "product_metadata.parquet"
+FILTER_RATING_THRESHOLD = 4
+
+# Product-level benchmark key.
+GROUPBY_COLUMN = ITEM_KEY_COLUMN
+JOIN_KEY_COLUMN = ITEM_KEY_COLUMN
+
+PRODUCT_METADATA_PATH = PROCESSED_DIR / "product_metadata.parquet"
+
 
 # ─────────────────────────────────────────────────────────
 # Framework Settings
 # ─────────────────────────────────────────────────────────
+
 FRAMEWORKS = ["pandas", "polars", "dask"]
 
-# Pandas
-PANDAS_CHUNK_SIZE = 100_000          # rows per chunk when reading CSV
+PANDAS_CHUNK_SIZE = 100_000
 
-# Polars
-POLARS_STREAMING  = True             # enable streaming for > RAM datasets
-POLARS_N_THREADS  = None             # None = auto (all cores)
+POLARS_STREAMING = True
+POLARS_N_THREADS = None
 
-# Dask
-# ── Memory budget ──────────────────────────────────────────────────────────
-# Rule of thumb on a 16 GB machine:
-#   Leave ~4 GB for OS + Pandas/Polars overhead.
-#   Remaining ~12 GB split across workers.
-#   2 workers × 4 GB = 8 GB total managed by Dask  ← safe for join workload
-#
-# Why the old 2 GB limit caused OOM on join:
-#   Dask was trying to persist both the reviews AND metadata inside each
-#   worker (combined ~3–4 GB per worker), exceeding the 1.86 GiB RSS limit.
-#   Raising the limit AND switching to broadcast join in join.py fixes this.
-# ──────────────────────────────────────────────────────────────────────────
-DASK_PARTITION_SIZE      = "128MB"
-DASK_N_WORKERS           = 2
-DASK_THREADS_PER_WORKER  = 2
-DASK_MEMORY_LIMIT        = "4GB"     # per worker  (was 2GB → OOM on join)
+DASK_PARTITION_SIZE = "128MB"
+DASK_N_WORKERS = 2
+DASK_THREADS_PER_WORKER = 2
+DASK_MEMORY_LIMIT = "4GB"
+
 
 # ─────────────────────────────────────────────────────────
 # IO Settings
 # ─────────────────────────────────────────────────────────
-DEFAULT_FORMAT   = "parquet"         # preferred dataset format
+
+DEFAULT_FORMAT = "parquet"
 PARQUET_COMPRESSION = "snappy"
-GENERATOR_CHUNK  = 2_000_000         # rows per generation chunk (~300 MB peak)
+GENERATOR_CHUNK = 2_000_000
+
 
 # ─────────────────────────────────────────────────────────
 # Memory Profiler
 # ─────────────────────────────────────────────────────────
-MEMORY_POLL_INTERVAL = 0.05          # seconds between RSS polls
+
+MEMORY_POLL_INTERVAL = 0.05
+
 
 # ─────────────────────────────────────────────────────────
 # Logging
 # ─────────────────────────────────────────────────────────
+
 LOG_LEVEL = "INFO"
-LOG_FILE  = LOG_DIR / "benchmark.log"
+LOG_FILE = LOG_DIR / "benchmark.log"

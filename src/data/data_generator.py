@@ -42,7 +42,6 @@ from contextlib import contextmanager       # FIX #13: moved from mid-file to to
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
@@ -52,12 +51,29 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.core.config import (
-    N_PRODUCTS, N_USERS,
+    N_PRODUCTS, N_PRODUCT_IDS, N_USERS,
     RATING_DISTRIBUTION,
-    SYNTHETIC_DIR, PROCESSED_DIR,
+    SYNTHETIC_DIR,
     BENCHMARK_SYN_DIR,
-    GENERATOR_CHUNK, PARQUET_COMPRESSION,
+    PARQUET_COMPRESSION,
     BENCHMARK_SIZES, SCALABILITY_SIZES,
+    TEXT_MIN_LEN as CONFIG_TEXT_MIN_LEN,
+    TEXT_MAX_LEN as CONFIG_TEXT_MAX_LEN,
+    TEXT_GENERATOR_MAX_LEN as CONFIG_TEXT_GENERATOR_MAX_LEN,
+    TEXT_VARIANTS as CONFIG_TEXT_VARIANTS,
+    RANDOM_INSERT_PROB as CONFIG_RANDOM_INSERT_PROB,
+    ID_POOL_REUSE_PROB as CONFIG_ID_POOL_REUSE_PROB,
+    PARENT_ASIN_REUSE_PROB,
+    TEXT_LEN_LOGNORMAL_MU,
+    TEXT_LEN_LOGNORMAL_SIGMA,
+    TEXT_LEN_QUANTILE_POINTS,
+    TEXT_LEN_QUANTILE_VALUES,
+    USER_ZIPF_ALPHA,
+    PARENT_ASIN_ZIPF_ALPHA,
+    HELPFUL_ZERO_PROB,
+    HELPFUL_LOGNORMAL_MEAN,
+    HELPFUL_LOGNORMAL_SIGMA,
+    HELPFUL_MAX,
 )
 from src.utils import get_logger, get_file_size_mb
 
@@ -65,16 +81,18 @@ logger = get_logger("data.generator")
 
 
 # ─────────────────────────────────────────────────────────
-# Fix #3 & #8 — Text length and entropy controls
+# Calibrated generation controls
 # ─────────────────────────────────────────────────────────
+# Values come from src/core/config.py, calibrated from real/1M.
 
-TEXT_MIN_LEN = 60
-TEXT_MAX_LEN = 300
-TEXT_VARIANTS = 2000
-RANDOM_INSERT_PROB = 0.02
+TEXT_MIN_LEN = CONFIG_TEXT_MIN_LEN       # p5  = 12  chars (calibrated from real/1M)
+TEXT_MAX_LEN = CONFIG_TEXT_MAX_LEN       # p85 = 374 chars (calibrated from real/1M)
+TEXT_GENERATOR_MAX_LEN = CONFIG_TEXT_GENERATOR_MAX_LEN
+TEXT_VARIANTS = CONFIG_TEXT_VARIANTS
+RANDOM_INSERT_PROB = CONFIG_RANDOM_INSERT_PROB
 
-# Fix #5 — ID reuse vs fresh-ID probability
-ID_POOL_REUSE_PROB  = 0.70
+# ID reuse vs fresh-ID probability
+ID_POOL_REUSE_PROB = CONFIG_ID_POOL_REUSE_PROB
 
 
 # ─────────────────────────────────────────────────────────
@@ -90,10 +108,24 @@ class BenchmarkTier(str, Enum):
 @dataclass
 class TierConfig:
     id_pool_reuse_prob: float = ID_POOL_REUSE_PROB
+    parent_asin_reuse_prob: float = PARENT_ASIN_REUSE_PROB
     text_min_len:       int   = TEXT_MIN_LEN
     text_max_len:       int   = TEXT_MAX_LEN
     text_variants:      int   = TEXT_VARIANTS
     random_insert_prob: float = RANDOM_INSERT_PROB
+    user_zipf_alpha:        float = USER_ZIPF_ALPHA
+    parent_asin_zipf_alpha: float = PARENT_ASIN_ZIPF_ALPHA
+
+    # Real-data calibrated text length model.
+    text_len_lognormal_mu:    float = TEXT_LEN_LOGNORMAL_MU
+    text_len_lognormal_sigma: float = TEXT_LEN_LOGNORMAL_SIGMA
+    use_text_quantile_model:   bool = True
+
+    # Real-data calibrated helpful_vote model.
+    helpful_zero_prob:        float = HELPFUL_ZERO_PROB
+    helpful_lognormal_mean:   float = HELPFUL_LOGNORMAL_MEAN
+    helpful_lognormal_sigma:  float = HELPFUL_LOGNORMAL_SIGMA
+    helpful_max:              int   = HELPFUL_MAX
 
 
 TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
@@ -103,13 +135,24 @@ TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
         text_max_len       = 200,
         text_variants      = 500,
         random_insert_prob = 0.05,
+        use_text_quantile_model = False,
     ),
     BenchmarkTier.TIER2: TierConfig(
-        id_pool_reuse_prob = 0.70,
+        id_pool_reuse_prob = ID_POOL_REUSE_PROB,
+        parent_asin_reuse_prob = PARENT_ASIN_REUSE_PROB,
         text_min_len       = TEXT_MIN_LEN,
-        text_max_len       = TEXT_MAX_LEN,
+        text_max_len       = TEXT_GENERATOR_MAX_LEN,
         text_variants      = TEXT_VARIANTS,
         random_insert_prob = RANDOM_INSERT_PROB,
+        user_zipf_alpha         = USER_ZIPF_ALPHA,
+        parent_asin_zipf_alpha  = PARENT_ASIN_ZIPF_ALPHA,
+        text_len_lognormal_mu    = TEXT_LEN_LOGNORMAL_MU,
+        text_len_lognormal_sigma = TEXT_LEN_LOGNORMAL_SIGMA,
+        use_text_quantile_model  = True,
+        helpful_zero_prob        = HELPFUL_ZERO_PROB,
+        helpful_lognormal_mean   = HELPFUL_LOGNORMAL_MEAN,
+        helpful_lognormal_sigma  = HELPFUL_LOGNORMAL_SIGMA,
+        helpful_max              = HELPFUL_MAX,
     ),
     BenchmarkTier.TIER3: TierConfig(
         id_pool_reuse_prob = 0.0,
@@ -117,6 +160,7 @@ TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
         text_max_len       = 9999,
         text_variants      = 0,
         random_insert_prob = 0.0,
+        use_text_quantile_model = False,
     ),
 }
 
@@ -163,33 +207,53 @@ class _IDPools:
         return cls._product_pool
 
 
-def _fresh_user_id(rng: np.random.Generator) -> str:
-    idx = rng.integers(0, len(_USER_ID_CHARS), _USER_ID_LEN)
-    return "".join(_USER_ID_CHARS[idx])
+_ZIPF_WEIGHT_CACHE: dict[tuple[int, float], np.ndarray] = {}
 
 
-def _fresh_product_id(rng: np.random.Generator) -> str:
-    idx = rng.integers(0, len(_PRODUCT_ID_CHARS), _PRODUCT_ID_LEN)
-    return "B" + "".join(_PRODUCT_ID_CHARS[idx])
+def _zipf_rank_weights(pool_size: int, alpha: float) -> np.ndarray:
+    """Rank-frequency weights where probability(rank) is proportional to rank^-alpha."""
+    key = (pool_size, round(alpha, 6))
+    weights = _ZIPF_WEIGHT_CACHE.get(key)
+    if weights is None:
+        ranks = np.arange(1, pool_size + 1, dtype="float64")
+        weights = ranks ** (-alpha)
+        weights /= weights.sum()
+        _ZIPF_WEIGHT_CACHE[key] = weights
+    return weights
 
 
-def _make_ids_with_reuse(
-    rng:        np.random.Generator,
-    n:          int,
-    pool:       list[str],
-    reuse_prob: float,
-    fresh_fn,
-) -> list[str]:
-    pool_size = len(pool)
-    is_reuse  = rng.random(n) < reuse_prob
-    pool_idx  = rng.integers(0, pool_size, n)
-    result    = []
-    for i in range(n):
-        if is_reuse[i]:
-            result.append(pool[pool_idx[i]])
-        else:
-            result.append(fresh_fn(rng))
-    return result
+def _make_ids_with_target_cardinality(
+    rng: np.random.Generator,
+    n: int,
+    pool: list[str],
+    alpha: float,
+    emitted_unique: int,
+    target_unique: int,
+) -> tuple[list[str], int]:
+    """
+    Draw IDs from a calibrated Zipf-like pool while guaranteeing target cardinality.
+
+    The old reuse/fresh split matched a rough reuse probability but doubled user
+    cardinality at 1M rows. This keeps the frozen unique counts from 01a/01c and
+    still produces hot-key skew through rank-frequency sampling.
+    """
+    target_unique = max(1, min(target_unique, len(pool)))
+    guaranteed_n = min(n, max(0, target_unique - emitted_unique))
+
+    ids: list[str] = []
+    if guaranteed_n:
+        ids.extend(pool[emitted_unique: emitted_unique + guaranteed_n])
+        emitted_unique += guaranteed_n
+
+    sampled_n = n - guaranteed_n
+    if sampled_n:
+        weights = _zipf_rank_weights(target_unique, alpha)
+        idx = rng.choice(target_unique, size=sampled_n, replace=True, p=weights)
+        ids.extend(pool[i] for i in idx)
+
+    if guaranteed_n and sampled_n:
+        rng.shuffle(ids)
+    return ids, emitted_unique
 
 
 # ─────────────────────────────────────────────────────────
@@ -283,34 +347,56 @@ def _make_texts_v2(
     max_len:            int,
     n_variants:         int,
     random_insert_prob: float,
+    lognormal_mu:       float,
+    lognormal_sigma:    float,
+    use_quantile_model: bool = True,
 ) -> list[str]:
-    """Fix #1 #3 #8: length-controlled, high-entropy review text."""
-    pool        = _get_sentence_pool(n_variants)
-    pool_size   = len(pool)
-    avg = (min_len + max_len) / 2
-    std = (max_len - min_len) / 4
+    """
+    Length-controlled, high-entropy review text.
 
-    target_lens = rng.normal(loc=avg, scale=std, size=n)
+    Fixes:
+    - Use calibrated log-normal target lengths instead of normal+clip.
+    - Truncate each row to its own target length instead of global max_len.
+    """
+    pool      = _get_sentence_pool(n_variants)
+    pool_size = len(pool)
+
+    if use_quantile_model:
+        quantiles = np.array([0.0, *TEXT_LEN_QUANTILE_POINTS, 1.0], dtype="float64")
+        lengths = np.array([min_len, *TEXT_LEN_QUANTILE_VALUES, max_len], dtype="float64")
+        target_lens = np.interp(rng.random(n), quantiles, lengths)
+    else:
+        target_lens = rng.lognormal(
+            mean=lognormal_mu,
+            sigma=lognormal_sigma,
+            size=n,
+        )
     target_lens = np.clip(target_lens, min_len, max_len).astype(int)
 
-    results = []
+    results: list[str] = []
     for i in range(n):
-        target = int(target_lens[i])
-        parts  = []
+        target = max(1, int(target_lens[i]))
+        parts: list[str] = []
         length = 0
+
         while length < target:
             sent = pool[rng.integers(0, pool_size)]
+
             if rng.random() < random_insert_prob:
                 pos  = rng.integers(0, max(1, len(sent)))
                 char = _NOISE_WORDS[rng.integers(0, len(_NOISE_WORDS))]
                 sent = sent[:pos] + char + sent[pos:]
+
             parts.append(sent)
             length += len(sent) + 1
+
         text = " ".join(parts)
-        if len(text) > max_len:
-            cut  = text.rfind(" ", 0, max_len)
-            text = text[:cut] if cut > 0 else text[:max_len]
+
+        if len(text) > target:
+            text = text[:target].rstrip()
+
         results.append(text)
+
     return results
 
 
@@ -505,6 +591,12 @@ def calibrate_from_real(real_parquet_dir: Path) -> TierConfig:
     but it has no dependency on `self` or `cls` — it is a pure factory function
     and belongs at module level.
 
+    Calibration strategy (aligned with 01b_calibrate_synthetic.ipynb):
+    - text_min_len  = p5  of real text_len  (loại outlier ngắn)
+    - text_max_len  = p99 of real text_len  (preserve validation tail)
+    - lognormal params fit trực tiếp từ log(text_len)
+    - id_pool_reuse_prob calibrated riêng cho user_id (không dùng avg của user+item)
+
     Usage:
         cfg = calibrate_from_real(Path("data/benchmark/real/1M"))
         TIER_CONFIGS[BenchmarkTier.TIER2] = cfg   # override tier2 globally
@@ -517,22 +609,78 @@ def calibrate_from_real(real_parquet_dir: Path) -> TierConfig:
     dfs = [pd.read_parquet(f) for f in files]
     df  = pd.concat(dfs, ignore_index=True)
 
-    text_col   = "review_text" if "review_text" in df.columns else "body"
-    avg_len    = int(df[text_col].str.len().mean())
-    reuse_prob = 1.0 - df["user_id"].nunique() / len(df)
+    text_col = "review_text" if "review_text" in df.columns else "body"
+    text_len = df[text_col].fillna("").astype(str).str.len()
+
+    # Text length calibration — p5/p99 keeps the real long-tail visible enough
+    # for the 01c KL/Wasserstein validation while still clipping extreme outliers.
+    text_min_len = int(text_len.quantile(0.05))
+    text_max_len = int(text_len.quantile(0.99))
+
+    # Log-normal fit on log(text_len) — reference for validation
+    log_len          = np.log(text_len.clip(lower=1))
+    lognormal_mu     = float(log_len.mean())
+    lognormal_sigma  = float(log_len.std())
+
+    # ID reuse — calibrate user_id separately (item reuse is much lower)
+    total_rows        = len(df)
+    reuse_prob_user   = 1.0 - df["user_id"].nunique() / total_rows
+    reuse_prob_parent = 1.0 - df["parent_asin"].nunique() / total_rows
 
     logger.info(
-        f"calibrate_from_real: avg_text_len={avg_len}, "
-        f"user_reuse_prob={reuse_prob:.3f} (from {len(df):,} rows)"
+        f"calibrate_from_real: rows={total_rows:,} | "
+        f"text p5={text_min_len} p99={text_max_len} | "
+        f"lognormal μ={lognormal_mu:.4f} σ={lognormal_sigma:.4f} | "
+        f"user_reuse_prob={reuse_prob_user:.4f} | "
+        f"parent_reuse_prob={reuse_prob_parent:.4f}"
     )
 
     return TierConfig(
-        id_pool_reuse_prob = min(0.98, reuse_prob),
-        text_min_len       = int(avg_len * 0.6),
-        text_max_len       = int(avg_len * 1.3),
-        text_variants      = TEXT_VARIANTS,
-        random_insert_prob = 0.1,
+        id_pool_reuse_prob       = min(0.98, reuse_prob_user),
+        parent_asin_reuse_prob   = min(0.98, reuse_prob_parent),
+        text_min_len             = text_min_len,
+        text_max_len             = text_max_len,
+        text_variants            = TEXT_VARIANTS,
+        random_insert_prob       = RANDOM_INSERT_PROB,
+        text_len_lognormal_mu    = lognormal_mu,
+        text_len_lognormal_sigma = lognormal_sigma,
     )
+
+
+# ─────────────────────────────────────────────────────────
+# Helpful vote generator
+# ─────────────────────────────────────────────────────────
+
+def _make_helpful_votes(
+    rng: np.random.Generator,
+    n: int,
+    zero_prob: float,
+    lognormal_mean: float,
+    lognormal_sigma: float,
+    max_value: int,
+) -> np.ndarray:
+    """
+    Generate helpful_vote as a zero-inflated long-tail variable.
+
+    Real data behavior:
+    - Most reviews have 0 helpful votes.
+    - Upper quantiles still have a visible tail, e.g. p90≈2, p95≈4, p99≈16.
+    """
+    values = np.zeros(n, dtype="int32")
+    nonzero_mask = rng.random(n) >= zero_prob
+    tail_n = int(nonzero_mask.sum())
+
+    if tail_n > 0:
+        tail = rng.lognormal(
+            mean=lognormal_mean,
+            sigma=lognormal_sigma,
+            size=tail_n,
+        )
+        tail = np.rint(tail).astype("int32")
+        tail = np.clip(tail, 1, max_value).astype("int32")
+        values[nonzero_mask] = tail
+
+    return values
 
 
 # ─────────────────────────────────────────────────────────
@@ -569,31 +717,64 @@ class SyntheticReviewGenerator:
         self.cfg        = TIER_CONFIGS[tier]
         self.chunk_size = chunk_size or rows_per_partition(tier)
         self._users     = _IDPools.users(N_USERS)
-        self._products  = _IDPools.products(N_PRODUCTS)
+        self._product_ids = _IDPools.products(N_PRODUCT_IDS)
+        self._parent_asins = _IDPools.products(N_PRODUCTS)
+        if tier == BenchmarkTier.TIER2:
+            self._target_unique_users = min(N_USERS, n_rows)
+            self._target_unique_parent_asins = min(N_PRODUCTS, n_rows)
+        else:
+            self._target_unique_users = min(N_USERS, max(1, round(n_rows * (1.0 - self.cfg.id_pool_reuse_prob))))
+            self._target_unique_parent_asins = min(N_PRODUCTS, max(1, round(n_rows * (1.0 - self.cfg.parent_asin_reuse_prob))))
+        self._target_unique_products = min(N_PRODUCT_IDS, n_rows)
+        self._emitted_unique_users = 0
+        self._emitted_unique_products = 0
+        self._emitted_unique_parent_asins = 0
 
     def _generate_chunk(self, n: int, rng: np.random.Generator) -> pd.DataFrame:
         cfg = self.cfg
 
-        user_ids    = _make_ids_with_reuse(rng, n, self._users,    cfg.id_pool_reuse_prob, _fresh_user_id)
-        product_ids = _make_ids_with_reuse(rng, n, self._products, cfg.id_pool_reuse_prob, _fresh_product_id)
+        user_ids, self._emitted_unique_users = _make_ids_with_target_cardinality(
+            rng,
+            n,
+            self._users,
+            cfg.user_zipf_alpha,
+            self._emitted_unique_users,
+            self._target_unique_users,
+        )
+        product_ids, self._emitted_unique_products = _make_ids_with_target_cardinality(
+            rng,
+            n,
+            self._product_ids,
+            cfg.parent_asin_zipf_alpha,
+            self._emitted_unique_products,
+            self._target_unique_products,
+        )
+        parent_asins, self._emitted_unique_parent_asins = _make_ids_with_target_cardinality(
+            rng,
+            n,
+            self._parent_asins,
+            cfg.parent_asin_zipf_alpha,
+            self._emitted_unique_parent_asins,
+            self._target_unique_parent_asins,
+        )
 
         review_nums  = rng.integers(1_000_000_000, 9_999_999_999 + 1, n)
         review_ids   = [f"R{x}" for x in review_nums]
         ratings      = rng.choice([1, 2, 3, 4, 5], n, p=RATING_DISTRIBUTION).astype("int8")
-        helpful_vote = rng.negative_binomial(1, 0.9, n).astype("int32")
+        helpful_vote = _make_helpful_votes(
+            rng,
+            n,
+            zero_prob       = cfg.helpful_zero_prob,
+            lognormal_mean  = cfg.helpful_lognormal_mean,
+            lognormal_sigma = cfg.helpful_lognormal_sigma,
+            max_value       = cfg.helpful_max,
+        )
 
         start_ts = pd.Timestamp("2010-01-01").timestamp()
         end_ts   = pd.Timestamp("2024-12-31").timestamp()
         times    = pd.to_datetime(rng.uniform(start_ts, end_ts, n), unit="s").normalize()
 
         verified = (rng.random(n) < 0.80)
-
-        parent_idx    = rng.integers(0, N_PRODUCTS, n)
-        is_own_parent = rng.random(n) < 0.70
-        parent_asins  = [
-            product_ids[i] if own else self._products[parent_idx[i]]
-            for i, own in enumerate(is_own_parent)
-        ]
 
         df = pd.DataFrame({
             "review_id":         review_ids,
@@ -615,6 +796,9 @@ class SyntheticReviewGenerator:
                 max_len            = cfg.text_max_len,
                 n_variants         = cfg.text_variants,
                 random_insert_prob = cfg.random_insert_prob,
+                lognormal_mu       = cfg.text_len_lognormal_mu,
+                lognormal_sigma    = cfg.text_len_lognormal_sigma,
+                use_quantile_model = cfg.use_text_quantile_model,
             )
             df["review_title"] = titles
             df["review_text"]  = texts
@@ -729,6 +913,7 @@ def generate_product_metadata(
 
     df = pd.DataFrame({
         "product_id":        product_ids,
+        "parent_asin":       product_ids,
         "price":             rng.uniform(5.0, 999.0, N_PRODUCTS).round(2),
         "brand":             rng.choice(brands, N_PRODUCTS),
         "avg_rating_global": rng.uniform(1.0, 5.0, N_PRODUCTS).round(2),

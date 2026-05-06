@@ -1,0 +1,36 @@
+{
+  "text_length": {
+    "distribution": "log-normal",
+    "mu": 4.7013,
+    "sigma": 1.1979,
+    "p50": 122,
+    "p90": 472,
+    "p99": 1234
+  },
+  "user_id": {
+    "distribution": "zipf",
+    "n_unique": 119926,
+    "zipf_alpha": 0.55,
+    "single_review_pct": 0.2183
+  },
+  "parent_asin": {
+    "distribution": "zipf",
+    "n_unique": 476112,
+    "zipf_alpha": 0.7012
+  },
+  "rating": {
+    "distribution": "categorical (empirical)",
+    "probs": {
+      "1": 0.0579,
+      "2": 0.0504,
+      "3": 0.0909,
+      "4": 0.1629,
+      "5": 0.6379
+    }
+  },
+  "memory": {
+    "bytes_per_row": 683.9,
+    "sample_rows": 1000000,
+    "sample_mb": 683.9
+  }
+}

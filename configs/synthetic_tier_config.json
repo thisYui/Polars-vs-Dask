@@ -1,0 +1,19 @@
+{
+  "text_min_len": 12,
+  "text_max_len": 374,
+  "text_variants": 2000,
+  "random_insert_prob": 0.02,
+  "id_pool_reuse_prob": 0.8801,
+  "rating_distribution": [
+    0.0579,
+    0.0504,
+    0.0909,
+    0.1629,
+    0.6379
+  ],
+  "text_len_lognormal_mu": 4.701,
+  "text_len_lognormal_sigma": 1.1984,
+  "calibrated_from": "real/1M",
+  "calibrated_rows": 1000000,
+  "calibrated_unique_users": 119926
+}
