@@ -37,14 +37,14 @@ def _ensure_metadata() -> Path:
 
 def pandas_pipeline(path: Path) -> "pd.DataFrame":
     import pandas as pd
-    meta = pd.read_parquet(_ensure_metadata(), columns=["product_id", "price", "brand"])
+    meta = pd.read_parquet(_ensure_metadata(), columns=["parent_asin", "price", "brand"])
     df   = _read_parquet(path)
     return (
         df[df["rating"] >= FILTER_RATING_THRESHOLD]
         .groupby(GROUPBY_COLUMN)["rating"]
         .agg(["mean", "count", "sum"])
         .reset_index()
-        .merge(meta, on="product_id", how="left")
+        .merge(meta, on="parent_asin", how="left")
         .sort_values("count", ascending=False)
     )
 
@@ -62,23 +62,23 @@ def polars_pipeline(path: Path, lazy: bool = True) -> "pl.DataFrame":
         pl.col("rating").sum().alias("rating_sum"),
     ]
     if lazy:
-        meta = pl.scan_parquet(meta_path).select(["product_id", "price", "brand"])
+        meta = pl.scan_parquet(meta_path).select(["parent_asin", "price", "brand"])
         return (
             pl.scan_parquet(scan_path)
             .filter(pl.col("rating") >= FILTER_RATING_THRESHOLD)
             .group_by(GROUPBY_COLUMN)
             .agg(aggs)
-            .join(meta, on="product_id", how="left")
+            .join(meta, on="parent_asin", how="left")
             .sort("rating_count", descending=True)
             .collect(streaming=POLARS_STREAMING)
         )
-    meta = pl.read_parquet(meta_path).select(["product_id", "price", "brand"])
+    meta = pl.read_parquet(meta_path).select(["parent_asin", "price", "brand"])
     return (
         pl.read_parquet(scan_path)
         .filter(pl.col("rating") >= FILTER_RATING_THRESHOLD)
         .group_by(GROUPBY_COLUMN)
         .agg(aggs)
-        .join(meta, on="product_id", how="left")
+        .join(meta, on="parent_asin", how="left")
         .sort("rating_count", descending=True)
     )
 

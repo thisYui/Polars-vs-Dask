@@ -1,6 +1,6 @@
 """
 src/workloads/groupby.py
-Workload 2: GroupBy aggregation — group by product_id, compute mean/count/sum of rating.
+Workload 2: GroupBy aggregation, compute mean/count/sum of rating.
 Tests aggregation engine performance.
 
 Fix:

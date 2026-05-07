@@ -1,6 +1,6 @@
 """
 src/workloads/join.py
-Workload 3: Join reviews with product metadata on product_id.
+Workload 3: Join reviews with product metadata on parent_asin.
 Tests large join performance.
 
 Strategy: closure-based map_partitions broadcast join.
@@ -46,7 +46,7 @@ def pandas_join(path: Path) -> "pd.DataFrame":
     import pandas as pd
     meta    = pd.read_parquet(_ensure_metadata())
     reviews = _read_parquet(path)
-    result  = reviews.merge(meta, on="product_id", how="left")
+    result  = reviews.merge(meta, on="parent_asin", how="left")
     _       = len(result)
     return result
 
@@ -58,48 +58,41 @@ def polars_join(path: Path, lazy: bool = True) -> "pl.DataFrame":
     if lazy:
         return (
             pl.scan_parquet(scan_path)
-            .join(pl.scan_parquet(meta_path), on="product_id", how="left")
+            .join(pl.scan_parquet(meta_path), on="parent_asin", how="left")
             .collect(streaming=POLARS_STREAMING)
         )
     return (
         pl.read_parquet(scan_path)
-        .join(pl.read_parquet(meta_path), on="product_id", how="left")
+        .join(pl.read_parquet(meta_path), on="parent_asin", how="left")
     )
 
 
 def dask_join(path: Path) -> "pd.DataFrame":
-    """
-    Practical Dask Join:
-    - Manual Broadcast Join via map_partitions (prevents OOM on Windows)
-    - No forced column list on reviews — let Dask infer schema from the actual
-      parquet files to avoid 'column not in index' errors when SCHEMA_COLUMNS
-      diverges from on-disk schema.
-    - Join key is always "product_id", consistent with pandas_join / polars_join.
-    """
     import dask
     import dask.dataframe as dd
     import pandas as pd
-    import warnings
 
-    JOIN_KEY = "product_id"
-
-    # Silence scheduler warning definitively
-    warnings.filterwarnings("ignore", message=".*single-machine scheduler.*")
-
+    JOIN_KEY = "parent_asin"
     read_path = str(path / "*.parquet") if path.is_dir() else str(path)
-
-    # Read without forcing a column list — schema inferred from parquet files.
     reviews = dd.read_parquet(read_path)
 
-    # Broadcast the small metadata table (only columns needed post-join).
+    if JOIN_KEY not in reviews.columns:
+        raise ValueError(f"Missing join key: {JOIN_KEY}")
+
     meta = pd.read_parquet(_ensure_metadata(), columns=[JOIN_KEY, "price", "brand"])
 
-    # Define output schema for Dask map_partitions.
-    meta_out = reviews._meta.merge(meta.head(0), on=JOIN_KEY, how="left")
+    # Align dtypes to prevent silent empty-join bug
+    meta[JOIN_KEY] = meta[JOIN_KEY].astype(reviews[JOIN_KEY].dtype)
 
-    def _local_merge(df, meta_df):
-        return df.merge(meta_df, on=JOIN_KEY, how="left")
+    # Use iloc[:0] instead of head(0) for schema-only empty frame
+    meta_out = reviews._meta.merge(meta.iloc[:0], on=JOIN_KEY, how="left")
 
-    # Use the threaded scheduler for stable RSS memory management on Windows.
+    def _local_merge(df: "pd.DataFrame") -> "pd.DataFrame":
+        return df.merge(meta, on=JOIN_KEY, how="left")
+
     with dask.config.set({"dataframe.scheduler-warning": False}):
-        return reviews.map_partitions(_local_merge, meta_df=meta, meta=meta_out).compute(scheduler="threads")
+        return (
+            reviews
+            .map_partitions(_local_merge, meta=meta_out)
+            .compute(scheduler="threads")
+        )

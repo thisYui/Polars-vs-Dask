@@ -496,7 +496,7 @@ def preprocess(
 # ─────────────────────────────────────────────────────────
 
 def generate_product_metadata(processed_parquet: Path = OUTPUT_PATH) -> Path:
-    from src.core.config import PRODUCT_METADATA_PATH
+    from src.core.config import PRODUCT_METADATA_PATH, JOIN_KEY_COLUMN
 
     if PRODUCT_METADATA_PATH.exists():
         logger.info(f"Product metadata already exists: {PRODUCT_METADATA_PATH}")
@@ -505,14 +505,20 @@ def generate_product_metadata(processed_parquet: Path = OUTPUT_PATH) -> Path:
     read_path = PARTITION_DIR if PARTITION_DIR.exists() else processed_parquet
     logger.info(f"Extracting product metadata from: {read_path}")
 
-    df   = pd.read_parquet(read_path, columns=["product_id", "category", "rating"])
+    key = JOIN_KEY_COLUMN  # currently "parent_asin"
+
+    df = pd.read_parquet(read_path, columns=[key, "category", "rating"])
+
     meta = (
-        df.groupby("product_id")
-        .agg(category=("category", "first"),
-             avg_rating_global=("rating", "mean"),
-             review_count=("rating", "count"))
+        df.groupby(key)
+        .agg(
+            category=("category", "first"),
+            avg_rating_global=("rating", "mean"),
+            review_count=("rating", "count"),
+        )
         .reset_index()
     )
+
     meta["avg_rating_global"] = meta["avg_rating_global"].round(2)
 
     import numpy as np
@@ -522,7 +528,7 @@ def generate_product_metadata(processed_parquet: Path = OUTPUT_PATH) -> Path:
 
     PRODUCT_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     meta.to_parquet(PRODUCT_METADATA_PATH, index=False)
-    logger.info(f"Saved product metadata: {PRODUCT_METADATA_PATH} ({len(meta):,} products)")
+    logger.info(f"Saved product metadata: {PRODUCT_METADATA_PATH} ({len(meta):,} items)")
     return PRODUCT_METADATA_PATH
 
 
