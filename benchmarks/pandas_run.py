@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 import argparse
 
 from src.core.config import (
-    BENCHMARK_SIZES, SCALABILITY_SIZES, GB_SIZES,
+    BENCHMARK_SIZES, SCALABILITY_SIZES, GB_SIZES, SYNTHETIC_STRESS_SIZES,
     BENCHMARK_RUNS, WARMUP_RUNS, WORKLOADS,
 )
 from src.core.benchmark import run_combination
@@ -32,7 +32,7 @@ from src.workloads import get_workload_fn
 logger    = get_logger("pandas_run")
 FRAMEWORK = "pandas"
 
-ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES}
+ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES, **SYNTHETIC_STRESS_SIZES}
 
 
 def _get_n_rows(size_label: str, path: Path) -> int:
@@ -107,7 +107,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Pandas benchmark runner")
     parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"],
-        choices=all_size_choices)
+        choices=all_size_choices,
+        metavar="SIZE",
+        help=f"Dataset size labels. Choices: {all_size_choices}")
     parser.add_argument("--workloads", nargs="+", default=WORKLOADS, choices=WORKLOADS)
     parser.add_argument("--runs",      type=int,  default=BENCHMARK_RUNS)
     parser.add_argument("--format",    choices=["parquet", "csv"],    default="parquet")

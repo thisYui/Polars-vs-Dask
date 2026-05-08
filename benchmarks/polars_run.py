@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 import argparse
 
 from src.core.config import (
-    BENCHMARK_SIZES, SCALABILITY_SIZES, GB_SIZES,
+    BENCHMARK_SIZES, SCALABILITY_SIZES, GB_SIZES, SYNTHETIC_STRESS_SIZES,
     BENCHMARK_RUNS, WARMUP_RUNS, WORKLOADS,
 )
 from src.core.benchmark import run_combination
@@ -31,7 +31,7 @@ from src.workloads import WORKLOAD_REGISTRY
 
 logger   = get_logger("polars_run")
 
-ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES}
+ALL_SIZE_MAP = {**BENCHMARK_SIZES, **SCALABILITY_SIZES, **GB_SIZES, **SYNTHETIC_STRESS_SIZES}
 
 
 def _get_n_rows(size_label: str, path: Path) -> int:
@@ -111,7 +111,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Polars benchmark runner")
     parser.add_argument("--sizes",     nargs="+", default=["1M", "10M"],
-        choices=all_size_choices)
+        choices=all_size_choices,
+        metavar="SIZE",
+        help=f"Dataset size labels. Choices: {all_size_choices}")
     parser.add_argument("--workloads", nargs="+", default=WORKLOADS, choices=WORKLOADS)
     parser.add_argument("--mode",      choices=["lazy", "eager", "both"], default="lazy")
     parser.add_argument("--runs",      type=int, default=BENCHMARK_RUNS)

@@ -2,7 +2,7 @@
 src/data/data_generator.py
 Fixed synthetic Amazon-like review generator for fair Polars vs Dask vs Pandas benchmarks.
 
-Fixes applied (11 original + 4 new):
+Fixes applied (11 original + 4 carried + 3 new directions):
   #1  review_text now 300–1000 chars with high entropy
   #2  Tier system ensures apples-to-apples comparison across datasets
   #3  TEXT_MIN_LEN / TEXT_MAX_LEN config controls RAM usage
@@ -18,16 +18,41 @@ Fixes applied (11 original + 4 new):
   #14 [NEW] import random / field removed (imported but never used)
   #15 [NEW] profile_section import os removed (os imported but never used inside)
 
+Three generation directions (redesign):
+  Hướng 1 — Real-like 100M (tier2):
+      Giữ nguyên config TIER2 calibrated từ real data, scale lên 100M rows.
+      Dùng: --tier tier2 --sizes 100M
+      Mục tiêu: benchmark scalability với distribution trung thực.
+
+  Hướng 2 — Skewed parent_asin 10M (tier2_skewed):
+      Chỉ skew parent_asin: Zipf alpha = 3.0 (mạnh).
+      Top 1% sản phẩm chiếm ~90% rows → mô phỏng viral/bestseller.
+      user_zipf_alpha giữ nguyên TIER2 để isolate đúng biến.
+      Dùng: --tier tier2_skewed --sizes 10M
+      Mục tiêu: group-by/join trên cột cardinality thấp + skew nặng.
+
+  Hướng 3 — High Unique user_id 10M (tier2_high_unique):
+      id_pool_reuse_prob=0.50 → ~50% unique user_id.
+      (trung bình mỗi user viết 2 review — light-user scenario)
+      parent_asin giữ nguyên TIER2 để chỉ isolate biến user cardinality.
+      user_zipf_alpha=0.8 → phân phối đều trong 50% unique pool.
+      Dùng: --tier tier2_high_unique --sizes 10M
+      Mục tiêu: dictionary encoding overhead, user-level group-by stress.
+
 Usage:
-    # Fixed sizes
+    # Hướng 1 — Real-like, scale to 100M
+    python src/data/data_generator.py --tier tier2 --sizes 100M
+
+    # Hướng 2 — Skewed IDs, 10M
+    python src/data/data_generator.py --tier tier2_skewed --sizes 10M
+
+    # Hướng 3 — High unique IDs, 10M
+    python src/data/data_generator.py --tier tier2_high_unique --sizes 10M
+
+    # Classic usage
     python src/data/data_generator.py --sizes 1M 10M 100M
-
-    # Scale by RAM target (recommended)
     python src/data/data_generator.py --target-ram-gb 5 10 20
-
-    # Choose tier
     python src/data/data_generator.py --tier tier1 --sizes 10M
-    python src/data/data_generator.py --tier tier2 --sizes 10M
 """
 
 from __future__ import annotations
@@ -100,9 +125,11 @@ ID_POOL_REUSE_PROB = CONFIG_ID_POOL_REUSE_PROB
 # ─────────────────────────────────────────────────────────
 
 class BenchmarkTier(str, Enum):
-    TIER1 = "tier1"   # Optimised synthetic: categorical + heavy ID reuse → best-case
-    TIER2 = "tier2"   # Realistic synthetic: no categorical + long text → mid-case
-    TIER3 = "tier3"   # Real dataset passthrough (no generation, just normalisation)
+    TIER1            = "tier1"           # Optimised synthetic: categorical + heavy ID reuse → best-case
+    TIER2            = "tier2"           # Realistic synthetic: calibrated from real data → mid-case (10M / 100M)
+    TIER2_SKEWED     = "tier2_skewed"    # [NEW] Skewed IDs: Zipf alpha=2.0, hot-key pressure (10M)
+    TIER2_HIGH_UNIQUE= "tier2_high_unique"  # [NEW] High unique IDs: low reuse (~80% unique) (10M)
+    TIER3            = "tier3"           # Real dataset passthrough (no generation, just normalisation)
 
 
 @dataclass
@@ -154,6 +181,53 @@ TIER_CONFIGS: dict[BenchmarkTier, TierConfig] = {
         helpful_lognormal_sigma  = HELPFUL_LOGNORMAL_SIGMA,
         helpful_max              = HELPFUL_MAX,
     ),
+    # ── [NEW] Hướng 2: Skewed parent_asin ───────────────────────────────────
+    # Chỉ skew parent_asin với Zipf alpha=3.0 (mạnh):
+    #   top 1% sản phẩm chiếm ~90% rows → mô phỏng viral/bestseller product.
+    # user_zipf_alpha giữ nguyên TIER2 (~1.1) để isolate đúng biến.
+    # Mục tiêu: kiểm tra group-by/join trên cột có cardinality thấp + skew nặng.
+    BenchmarkTier.TIER2_SKEWED: TierConfig(
+        id_pool_reuse_prob       = ID_POOL_REUSE_PROB,
+        parent_asin_reuse_prob   = PARENT_ASIN_REUSE_PROB,
+        text_min_len             = TEXT_MIN_LEN,
+        text_max_len             = TEXT_GENERATOR_MAX_LEN,
+        text_variants            = TEXT_VARIANTS,
+        random_insert_prob       = RANDOM_INSERT_PROB,
+        user_zipf_alpha          = USER_ZIPF_ALPHA,        # giữ nguyên TIER2
+        parent_asin_zipf_alpha   = 3.0,   # <<< chỉ skew parent_asin: top 1% ~ 90% rows
+        text_len_lognormal_mu    = TEXT_LEN_LOGNORMAL_MU,
+        text_len_lognormal_sigma = TEXT_LEN_LOGNORMAL_SIGMA,
+        use_text_quantile_model  = True,
+        helpful_zero_prob        = HELPFUL_ZERO_PROB,
+        helpful_lognormal_mean   = HELPFUL_LOGNORMAL_MEAN,
+        helpful_lognormal_sigma  = HELPFUL_LOGNORMAL_SIGMA,
+        helpful_max              = HELPFUL_MAX,
+    ),
+
+    # ── [NEW] Hướng 3: High Unique IDs ───────────────────────────────────────
+    # id_pool_reuse_prob=0.50 → ~50% unique user_id
+    #   (trung bình mỗi user viết 2 review — gần giống real Amazon light-users).
+    # parent_asin_reuse_prob giữ nguyên TIER2 để chỉ isolate biến user cardinality.
+    # user_zipf_alpha=0.8 → phân phối đều hơn giữa các unique user (không có superstar).
+    # Mục tiêu: dictionary encoding overhead, high-cardinality user group-by.
+    BenchmarkTier.TIER2_HIGH_UNIQUE: TierConfig(
+        id_pool_reuse_prob       = 0.50,  # <<< 50% unique users (TIER2 ~0.70 reuse)
+        parent_asin_reuse_prob   = PARENT_ASIN_REUSE_PROB,  # giữ nguyên TIER2
+        text_min_len             = TEXT_MIN_LEN,
+        text_max_len             = TEXT_GENERATOR_MAX_LEN,
+        text_variants            = TEXT_VARIANTS,
+        random_insert_prob       = RANDOM_INSERT_PROB,
+        user_zipf_alpha          = 0.8,   # <<< đều hơn trong 50% unique pool
+        parent_asin_zipf_alpha   = PARENT_ASIN_ZIPF_ALPHA,  # giữ nguyên TIER2
+        text_len_lognormal_mu    = TEXT_LEN_LOGNORMAL_MU,
+        text_len_lognormal_sigma = TEXT_LEN_LOGNORMAL_SIGMA,
+        use_text_quantile_model  = True,
+        helpful_zero_prob        = HELPFUL_ZERO_PROB,
+        helpful_lognormal_mean   = HELPFUL_LOGNORMAL_MEAN,
+        helpful_lognormal_sigma  = HELPFUL_LOGNORMAL_SIGMA,
+        helpful_max              = HELPFUL_MAX,
+    ),
+
     BenchmarkTier.TIER3: TierConfig(
         id_pool_reuse_prob = 0.0,
         text_min_len       = 0,
@@ -441,9 +515,11 @@ def _make_titles(rng: np.random.Generator, n: int) -> list[str]:
 # ─────────────────────────────────────────────────────────
 
 _BYTES_PER_ROW: dict[BenchmarkTier, int] = {
-    BenchmarkTier.TIER1: 50,
-    BenchmarkTier.TIER2: 50,
-    BenchmarkTier.TIER3: 35,
+    BenchmarkTier.TIER1:             50,
+    BenchmarkTier.TIER2:             50,
+    BenchmarkTier.TIER2_SKEWED:      50,   # same text profile as TIER2
+    BenchmarkTier.TIER2_HIGH_UNIQUE: 50,   # same text profile as TIER2
+    BenchmarkTier.TIER3:             35,
 }
 
 
@@ -720,6 +796,17 @@ class SyntheticReviewGenerator:
         self._product_ids = _IDPools.products(N_PRODUCT_IDS)
         self._parent_asins = _IDPools.products(N_PRODUCTS)
         if tier == BenchmarkTier.TIER2:
+            # Calibrated: unique count = min(pool, n_rows) → matches real data cardinality
+            self._target_unique_users = min(N_USERS, n_rows)
+            self._target_unique_parent_asins = min(N_PRODUCTS, n_rows)
+        elif tier == BenchmarkTier.TIER2_HIGH_UNIQUE:
+            # Hướng 3: ~50% unique users (reuse_prob=0.50 → unique_prob=0.50)
+            # parent_asin giữ nguyên TIER2 (full cardinality)
+            self._target_unique_users = min(N_USERS, max(1, round(n_rows * (1.0 - self.cfg.id_pool_reuse_prob))))
+            self._target_unique_parent_asins = min(N_PRODUCTS, n_rows)  # TIER2-style
+        elif tier == BenchmarkTier.TIER2_SKEWED:
+            # Hướng 2: user cardinality TIER2-style (full), parent_asin TIER2-style (full)
+            # Skew được tạo bởi Zipf alpha=3.0 trên parent_asin, không phải bằng pool nhỏ
             self._target_unique_users = min(N_USERS, n_rows)
             self._target_unique_parent_asins = min(N_PRODUCTS, n_rows)
         else:
@@ -1070,6 +1157,16 @@ def prepare_synthetic(
     from src.core.config import SCALABILITY_SIZES
     all_sizes = {**BENCHMARK_SIZES, **SCALABILITY_SIZES}
 
+    # ── [Hướng 1] Fallback: nếu config.py chưa có "100M", thêm hardcoded ──
+    # SCALABILITY_SIZES trong config.py cũ có thể chưa có 100M.
+    # Thêm ở đây để generate_syn_100m step không crash.
+    _DIRECTION_SIZES: dict[str, int] = {
+        "10M":  10_000_000,   # Hướng 2 & 3
+        "100M": 100_000_000,  # Hướng 1
+    }
+    for k, v in _DIRECTION_SIZES.items():
+        all_sizes.setdefault(k, v)
+
     if target_gb is not None:
         target_bytes = int(target_gb * 1024 ** 3)
         n_rows, bpr  = calibrated_rows_for_size(target_bytes, tier, workload)
@@ -1079,9 +1176,19 @@ def prepare_synthetic(
             f"(calibrated {bpr:.1f} B/row, tier={tier})"
         )
     elif size_label is not None:
-        if size_label not in all_sizes:
+        # Allow custom labels (e.g. "10M_skewed") that are not in all_sizes dict.
+        # Strip a known suffix to resolve the base row count.
+        _base_label = size_label
+        for _suffix in ("_skewed", "_highuid", f"_{tier.value}"):
+            if _base_label.endswith(_suffix):
+                _base_label = _base_label[: -len(_suffix)]
+                break
+        if _base_label in all_sizes:
+            n_rows = all_sizes[_base_label]
+        elif size_label in all_sizes:
+            n_rows = all_sizes[size_label]
+        else:
             raise ValueError(f"Unknown size label '{size_label}'. Choose from {list(all_sizes)}")
-        n_rows = all_sizes[size_label]
     else:
         raise ValueError("Provide either size_label or target_gb")
 
@@ -1100,13 +1207,17 @@ def prepare_synthetic(
 
         generate_product_metadata(force=force)
 
-    # ── NEW: auto-split into benchmark_syn/<XGB>/ when requested ──
-    if target_gb is not None and split_benchmark:
-        label = _gb_label(target_gb)
-        logger.info(f"Splitting into benchmark_syn/{label}/ …")
+    # ── NEW: auto-split into benchmark_syn/<label>/ when requested ──
+    # Supports both --target-ram-gb (GB label) and --sizes (e.g. "10M_skewed", "100M")
+    if split_benchmark:
+        if target_gb is not None:
+            bench_label = _gb_label(target_gb)
+        else:
+            bench_label = size_label          # e.g. "10M_skewed", "100M"
+        logger.info(f"Splitting into benchmark_syn/{bench_label}/ …")
         _split_to_benchmark_syn(
             source_path    = path,
-            gb_label       = label,
+            gb_label       = bench_label,
             partition      = partition,
             target_file_mb = target_file_mb,
             force          = force,
@@ -1121,7 +1232,11 @@ def prepare_synthetic(
 
 if __name__ == "__main__":
     from src.core.config import SCALABILITY_SIZES
-    all_size_keys = list({**BENCHMARK_SIZES, **SCALABILITY_SIZES}.keys())
+    # Đảm bảo 10M và 100M luôn available trong CLI kể cả khi config cũ chưa có
+    _all_size_keys_dict = {**BENCHMARK_SIZES, **SCALABILITY_SIZES}
+    _all_size_keys_dict.setdefault("10M",  10_000_000)
+    _all_size_keys_dict.setdefault("100M", 100_000_000)
+    all_size_keys = list(_all_size_keys_dict.keys())
 
     parser = argparse.ArgumentParser(
         description="Generate synthetic benchmark datasets (fixed bias issues)"
@@ -1143,6 +1258,12 @@ if __name__ == "__main__":
         "--tier",
         choices=[t.value for t in BenchmarkTier if t != BenchmarkTier.TIER3],
         default=BenchmarkTier.TIER2.value,
+        help=(
+            "tier1=optimised (high reuse), "
+            "tier2=realistic/real-like (default, dùng cho 100M), "
+            "tier2_skewed=hot-key skew Zipf α=2.0 (10M), "
+            "tier2_high_unique=~80%% unique IDs (10M)"
+        ),
     )
     parser.add_argument(
         "--workload",
@@ -1157,7 +1278,17 @@ if __name__ == "__main__":
         "--split-benchmark", action="store_true",
         help=(
             "After generating, copy/partition file into "
-            "data/benchmark_syn/<XGB>/ (only applies with --target-ram-gb)"
+            "data/benchmark_syn/<label>/ (works with both --sizes and --target-ram-gb)"
+        ),
+    )
+    parser.add_argument(
+        "--size-label",
+        default=None,
+        metavar="LABEL",
+        help=(
+            "Custom output label for the generated file, e.g. '10M_skewed'. "
+            "Row count is inferred from the base label (strip suffix). "
+            "Used by run_pipeline for Hướng 2 & 3 so files don't overwrite each other."
         ),
     )
     parser.add_argument(
@@ -1189,11 +1320,16 @@ if __name__ == "__main__":
             )
     else:
         for label in args.sizes:
+            # --size-label overrides the default label (useful for a single --sizes entry)
+            effective_label = args.size_label if (args.size_label and len(args.sizes) == 1) else label
             prepare_synthetic(
-                size_label = label,
-                fmt        = args.format,
-                dest_dir   = dest,
-                force      = args.force,
-                tier       = tier,
-                workload   = workload,
+                size_label      = effective_label,
+                fmt             = args.format,
+                dest_dir        = dest,
+                force           = args.force,
+                tier            = tier,
+                workload        = workload,
+                split_benchmark = args.split_benchmark,
+                partition       = args.partition,
+                target_file_mb  = args.target_file_mb,
             )

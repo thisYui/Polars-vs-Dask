@@ -94,10 +94,19 @@ GB_SIZES: dict[str, None] = {
     "50GB": None,
 }
 
+# Stress-test sizes for the three synthetic generation directions.
+# Row count is None → resolved at runtime from parquet metadata.
+SYNTHETIC_STRESS_SIZES: dict[str, int | None] = {
+    "10M_skewed":  None,   # Hướng 2: parent_asin Zipf α=3.0, hot-key skew
+    "10M_highuid": None,   # Hướng 3: ~50% unique user_id, high-cardinality
+    "100M":        100_000_000,  # Hướng 1: TIER2 real-like, large scale
+}
+
 ALL_SIZE_LABELS: list[str] = list({
     **BENCHMARK_SIZES,
     **SCALABILITY_SIZES,
     **{k: 0 for k in GB_SIZES},
+    **{k: 0 for k in SYNTHETIC_STRESS_SIZES},
 }.keys())
 
 

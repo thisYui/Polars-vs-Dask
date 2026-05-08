@@ -9,6 +9,9 @@ Available steps:
     split_real          Cắt processed parquet → benchmark splits (1M/10M/...)
     generate_synthetic  Tạo synthetic data bằng numpy (không cần internet)
     split_synthetic     Cắt synthetic data → benchmark splits
+    generate_syn_100m   Hướng 1: TIER2 real-like → 100M rows
+    generate_syn_skewed Hướng 2: parent_asin Zipf α=3.0 → 10M rows
+    generate_syn_highuid Hướng 3: ~50% unique user_id → 10M rows
     benchmark_pandas    Chạy benchmark Pandas
     benchmark_polars    Chạy benchmark Polars (lazy)
     benchmark_polars_eager  Chạy benchmark Polars (eager)
@@ -25,9 +28,25 @@ Usage:
     python run_pipeline.py --steps download preprocess split_real --sizes 1M 10M
     python run_pipeline.py --steps compress preprocess split_real --sizes 1M 10M 50M --partition
 
-    # Synthetic
+    # Synthetic — classic
     python run_pipeline.py --steps generate_synthetic --sizes 1M 10M
     python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M 100M
+
+    # ── Ba hướng generation mới ───────────────────────────────────────────────
+    # Hướng 1: TIER2 real-like, scale lên 100M rows
+    python run_pipeline.py --steps generate_syn_100m --partition --verbose
+
+    # Hướng 2: Skewed parent_asin (Zipf α=3.0), 10M rows
+    python run_pipeline.py --steps generate_syn_skewed --partition --verbose
+    # → data/synthetic/reviews_10M_skewed.parquet + data/benchmark_syn/10M_skewed/part-*.parquet
+
+    # Hướng 3: High unique user_id (~50% unique), 10M rows
+    python run_pipeline.py --steps generate_syn_highuid --partition --verbose
+    # → data/synthetic/reviews_10M_highuid.parquet + data/benchmark_syn/10M_highuid/part-*.parquet
+
+    # Chạy cả 3 hướng cùng lúc
+    python run_pipeline.py --steps generate_syn_100m generate_syn_skewed generate_syn_highuid --partition --verbose
+    # ─────────────────────────────────────────────────────────────────────────
 
     # RAM-targeted synthetic (recommended)
     python run_pipeline.py --steps generate_synthetic --target-ram-gb 0.3
@@ -43,15 +62,30 @@ Usage:
     python run_pipeline.py --steps split_real --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps generate_synthetic split_synthetic --sizes 1M 10M 50M --data-type syn --partition --verbose
     python run_pipeline.py --steps generate_synthetic --target-ram-gb 5 10 20 --data-type syn --partition --verbose
+    python run_pipeline.py --steps generate_syn_100m --partition --verbose
+    python run_pipeline.py --steps generate_syn_skewed --partition --verbose
+    python run_pipeline.py --steps generate_syn_highuid --partition --verbose
 
-    python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type real --partition --verbose
-    python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type syn --partition --verbose
-    python run_pipeline.py --groups benchmark --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+    # Chạy cả 3 hướng cùng lúc
+    python run_pipeline.py --steps generate_syn_100m generate_syn_skewed generate_syn_highuid --partition --verbose
+
+    # Shouldn't run this command because it can has effect lẫn nhau
+    # python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type real --partition --verbose
+    # python run_pipeline.py --groups benchmark --sizes 1M 10M 50M --data-type syn --partition --verbose
+    # python run_pipeline.py --groups benchmark --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+
 
     python run_pipeline.py --steps benchmark_pandas --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps benchmark_polars --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps benchmark_polars_eager --sizes 1M 10M 50M --data-type real --partition --verbose
     python run_pipeline.py --steps benchmark_dask --sizes 1M 10M 50M --data-type real --partition --verbose
+
+    python run_pipeline.py --steps benchmark_pandas --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+    python run_pipeline.py --steps benchmark_polars --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+    python run_pipeline.py --steps benchmark_polars_eager --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+    python run_pipeline.py --steps benchmark_dask --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
+    
+    python run_pipeline.py --steps benchmark_pandas benchmark_polars benchmark_dask --sizes 10M_skewed 10M_highuid 100M --data-type syn --verbose  
 """
 
 import argparse
@@ -81,6 +115,9 @@ def _run_all_via_config(cfg_name: str, results_file: str = "all_results.csv") ->
 # ─────────────────────────────────────────────────────────
 _HERE = Path(__file__).resolve().parent
 ROOT  = _HERE.parent if _HERE.name == "scripts" else _HERE
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 LOG_DIR     = ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,6 +194,9 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
         # use rough estimate (10M rows/GB) only for computing _download_cap
         "1GB":  10_000_000,  "5GB":  50_000_000,
         "10GB": 100_000_000, "20GB": 200_000_000, "50GB": 500_000_000,
+        # Stress-test synthetic sizes — treat as 10M for download cap purposes
+        "10M_skewed":  10_000_000,
+        "10M_highuid": 10_000_000,
     }
     _max_needed   = max(_SIZE_MAP.get(s, 0) for s in sizes_flag)
     _download_cap = int(_max_needed * 1.2)
@@ -266,6 +306,60 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
             }
         ] if split_syn_cmd else []),
 
+        # ── [NEW] Ba hướng generation riêng biệt ─────────────────────────────
+        # Hướng 1: TIER2 real-like → 100M rows
+        # Giữ nguyên config calibrated từ real data, chỉ scale lên 100M.
+        # Output file: data/synthetic/reviews_100M.parquet
+        # benchmark_syn: data/benchmark_syn/100M/part-*.parquet
+        {
+            "name":        "generate_syn_100m",
+            "group":       "data",
+            "description": "[Hướng 1] TIER2 real-like → 100M rows (giữ config thật)",
+            "required":    False,
+            "cmd": _python("src/data/data_generator.py") + [
+                "--tier",        "tier2",
+                "--sizes",       "100M",
+                "--split-benchmark",
+                "--target-file-mb", str(args.target_file_mb),
+            ] + gen_partition_flag + gen_force_flag,
+        },
+
+        # Hướng 2: Skewed parent_asin (Zipf α=3.0), 10M rows
+        # top 1% sản phẩm chiếm ~90% rows, user_zipf giữ nguyên TIER2.
+        # Output file: data/synthetic/reviews_10M_skewed.parquet
+        # benchmark_syn: data/benchmark_syn/10M_skewed/part-*.parquet
+        {
+            "name":        "generate_syn_skewed",
+            "group":       "data",
+            "description": "[Hướng 2] TIER2_SKEWED → 10M rows, parent_asin Zipf α=3.0",
+            "required":    False,
+            "cmd": _python("src/data/data_generator.py") + [
+                "--tier",        "tier2_skewed",
+                "--sizes",       "10M",
+                "--size-label",  "10M_skewed",
+                "--split-benchmark",
+                "--target-file-mb", str(args.target_file_mb),
+            ] + gen_partition_flag + gen_force_flag,
+        },
+
+        # Hướng 3: High unique user_id (~50% unique), 10M rows
+        # mỗi user trung bình viết 2 review, parent_asin giữ nguyên TIER2.
+        # Output file: data/synthetic/reviews_10M_highuid.parquet
+        # benchmark_syn: data/benchmark_syn/10M_highuid/part-*.parquet
+        {
+            "name":        "generate_syn_highuid",
+            "group":       "data",
+            "description": "[Hướng 3] TIER2_HIGH_UNIQUE → 10M rows, ~50% unique user_id",
+            "required":    False,
+            "cmd": _python("src/data/data_generator.py") + [
+                "--tier",        "tier2_high_unique",
+                "--sizes",       "10M",
+                "--size-label",  "10M_highuid",
+                "--split-benchmark",
+                "--target-file-mb", str(args.target_file_mb),
+            ] + gen_partition_flag + gen_force_flag,
+        },
+
         # ===== BENCHMARK =====
         # _result_suffix: use "size" when running GB-label sizes so output files
         # are named pandas_size_results.csv etc. (separate from row-count runs).
@@ -275,8 +369,28 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
     ]
 
     # Pre-compute result suffix (must be outside the list literal)
-    _is_gb_run    = args.target_ram_gb or any(s.endswith("GB") for s in sizes_flag)
-    _result_suffix = "size" if _is_gb_run else data_type_flag
+    # Priority: GB run → "size" | all stress labels → tier name | else data_type ("syn"/"real")
+    _is_gb_run = args.target_ram_gb or any(s.endswith("GB") for s in sizes_flag)
+
+    _STRESS_SUFFIX = {
+        "10M_skewed":  "skewed",
+        "10M_highuid": "highuid",
+        "100M":        "100m",
+    }
+    _stress_suffixes = {_STRESS_SUFFIX[s] for s in sizes_flag if s in _STRESS_SUFFIX}
+    _non_stress      = [s for s in sizes_flag if s not in _STRESS_SUFFIX]
+
+    if _is_gb_run:
+        _result_suffix = "size"
+    elif len(_stress_suffixes) == 1 and not _non_stress:
+        # All sizes map to the same stress tier → use that tier name
+        _result_suffix = _stress_suffixes.pop()
+    elif _stress_suffixes and not _non_stress:
+        # Mix of stress tiers (e.g. skewed + highuid) → join them
+        _result_suffix = "_".join(sorted(_stress_suffixes))
+    else:
+        # Normal row-count sizes, or mix of stress + normal → fallback to data_type
+        _result_suffix = data_type_flag
 
     # ── benchmark_all: config-driven in-process run ───────
     # Determines which YAML to load from the sizes being requested.
@@ -494,7 +608,10 @@ def main() -> None:
     data_grp = parser.add_argument_group("Data")
     data_grp.add_argument("--sizes", nargs="+", default=["1M", "10M"],
         choices=["1M", "5M", "10M", "50M", "100M",
-                 "1GB", "5GB", "10GB", "20GB", "50GB"])
+                 "1GB", "5GB", "10GB", "20GB", "50GB",
+                 "10M_skewed", "10M_highuid"],
+        metavar="SIZE",
+        help="Size labels including stress-test variants: 10M_skewed, 10M_highuid")
     data_grp.add_argument("--data-source", choices=["auto", "real", "synthetic"], default="auto")
     data_grp.add_argument("--amazon-categories", nargs="+", default=None)
     data_grp.add_argument("--small-download", action="store_true", default=False)

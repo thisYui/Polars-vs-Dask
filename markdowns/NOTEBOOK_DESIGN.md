@@ -1,13 +1,13 @@
-# FULL NOTEBOOK DESIGN — SCENARIO-BASED VERSION
+# FULL NOTEBOOK DESIGN — BENCHMARK-ALIGNED VERSION
 
 This document defines the purpose, scope, and analysis logic for every notebook in the project.
 
-The notebook structure is revised from a workload-based design to a scenario-based design.  
-The benchmark is organized around three independent tracks:
+The notebook structure is aligned with the revised benchmark design. The benchmark is organized around four independent benchmark groups:
 
-1. Logical Scaling
-2. Physical Scaling
-3. Real vs Synthetic Runtime Validation
+1. Benchmark 1 — Real Data Row Scaling
+2. Benchmark 2 — Physical Scaling by Dataset Size
+3. Benchmark 3 — Synthetic Stress Benchmark
+4. Benchmark 4 — Real Data OS Comparison: Windows vs Linux
 
 This structure keeps each notebook focused on one research question and avoids mixing variables.
 
@@ -21,7 +21,7 @@ These rules apply to all notebooks from `02` onward.
 
 Notebooks must not run benchmark workloads directly.
 
-Benchmark execution is handled separately by:
+Benchmark execution is handled separately by scripts such as:
 
 ```bash
 python run_pipeline.py ...
@@ -43,12 +43,32 @@ data/benchmark_real/
 data/benchmark_syn/
 ```
 
+Recommended dataset/result naming:
+
+```text
+data/benchmark_real/1M/
+data/benchmark_real/10M/
+data/benchmark_real/50M/
+
+data/benchmark_syn/size_1GB/
+data/benchmark_syn/size_5GB/
+data/benchmark_syn/size_20GB/
+data/benchmark_syn/size_over_ram/
+
+data/benchmark_syn/stress_100M_real_like/
+data/benchmark_syn/stress_10M_heavy_skew/
+data/benchmark_syn/stress_10M_high_unique_id/
+
+results/raw/windows/
+results/raw/linux/
+```
+
 ## Result Filtering
 
 Always filter benchmark results with:
 
 ```python
-df = df[df["status"] == "ok"]
+df_ok = df[df["status"] == "ok"]
 ```
 
 Failed runs should be analyzed separately only when the notebook explicitly discusses failure behavior.
@@ -65,17 +85,18 @@ number of successful runs
 
 Do not draw conclusions from a single timed run unless the notebook clearly states that it is exploratory.
 
-## Track Separation Rule
+## Benchmark Separation Rule
 
-Never mix logical scaling, physical scaling, and real-vs-synthetic validation in the same analysis table unless the purpose is explicitly comparison across tracks.
+Never mix the four benchmark groups in the same analysis table unless the purpose is explicitly comparison across benchmark groups.
 
-Each track controls a different primary variable:
+Each benchmark controls a different primary variable:
 
-| Track | Primary Variable | Controlled Variables |
-|---|---|---|
-| Logical Scaling | Rows | Distribution fixed |
-| Physical Scaling | Memory size | Synthetic only, distribution fixed |
-| Real vs Synthetic Runtime | Data type | Rows fixed |
+| Benchmark | Primary Variable | Dataset Type | Controlled Variables |
+|---|---|---|---|
+| Benchmark 1 — Real Row Scaling | Rows | Real only | Same schema, same workload, same environment |
+| Benchmark 2 — Physical Scaling | Dataset size / memory footprint | Synthetic only | Fixed synthetic distribution |
+| Benchmark 3 — Synthetic Stress | Synthetic stress condition | Synthetic only | Fixed row count where specified, controlled generator variants |
+| Benchmark 4 — Real OS Comparison | Operating system | Real only | Same real datasets, same scripts |
 
 ---
 
@@ -83,7 +104,7 @@ Each track controls a different primary variable:
 
 ## Purpose
 
-Sanity-check the project environment, paths, datasets, and benchmark result files before analysis begins.
+Sanity-check the project environment, paths, datasets, benchmark result files, and OS metadata before analysis begins.
 
 ## Inputs
 
@@ -103,11 +124,14 @@ data/benchmark_syn/
   - workload
   - dataset_size
   - data_type
+  - benchmark_group
+  - os
   - status
   - execution time
   - memory usage
 - Check available dataset folders.
 - Check schema consistency between real and synthetic datasets.
+- Check whether both Windows and Linux result folders exist when OS comparison is enabled.
 
 ## Output
 
@@ -116,6 +140,7 @@ data/benchmark_syn/
 - Available benchmark results.
 - Missing file warnings.
 - Basic schema preview.
+- OS/result availability summary.
 
 ## Key Insight
 
@@ -133,12 +158,19 @@ This notebook confirms that the pipeline has produced the expected data and resu
 
 Understand the statistical structure of the real Amazon Reviews dataset.
 
-This notebook profiles the real 1M sample and identifies the distributions that synthetic data must preserve.
+This notebook profiles the real data and identifies the distributions that synthetic data must preserve.
 
 ## Inputs
 
 ```text
 data/benchmark_real/1M/
+```
+
+Optionally sample-check:
+
+```text
+data/benchmark_real/10M/
+data/benchmark_real/50M/
 ```
 
 ## Analysis
@@ -252,8 +284,7 @@ Synthetic data should scale by row count or memory target while keeping the same
 
 Validate whether synthetic data resembles real data closely enough for benchmarking.
 
-This notebook does not benchmark framework performance.  
-It only validates data quality.
+This notebook does not benchmark framework performance. It only validates data quality.
 
 ## Inputs
 
@@ -311,53 +342,52 @@ Synthetic data is accepted only if it preserves the statistical properties that 
 
 # 3. `benchmarks/`
 
-The benchmark notebooks are now organized by scenario/track instead of workload.
+The benchmark notebooks are organized by benchmark group instead of workload.
 
 ---
 
-## 3.1 `02_logical_scaling.ipynb`
+## 3.1 `02_real_row_scaling.ipynb`
 
-## Track
+## Benchmark
 
-Track A — Logical Scaling
+Benchmark 1 — Real Data Row Scaling
 
 ## Purpose
 
-Analyze how each framework scales as the number of rows increases.
+Analyze how each framework scales on real data as the number of rows increases.
 
-This is the primary benchmark track.
+This is the primary benchmark for real-world performance.
 
 ## Research Question
 
-How do Pandas, Polars, and Dask scale when dataset row count increases?
+How do Pandas, Polars, and Dask scale on real Amazon Reviews data when row count increases from 1M to 10M to 50M?
 
 ## Inputs
 
 ```text
 results/raw/
 data/benchmark_real/
-data/benchmark_syn/
 ```
 
 ## Scope
 
 | Parameter | Value |
 |---|---|
-| Sizes | 1M, 10M, 50M |
-| Data Types | Real + Synthetic |
+| Dataset Type | Real only |
+| Row Counts | 1M, 10M, 50M |
 | Frameworks | Pandas, Polars, Dask |
 | Workloads | Filter, GroupBy, Join, Pipeline |
 | Primary Variable | Number of rows |
 
 ## Analysis
 
-- Load benchmark results for row-based sizes.
+- Load benchmark results for real row-based datasets.
 - Filter `status == "ok"`.
 - Aggregate repeated runs by:
   - framework
   - workload
   - dataset_size
-  - data_type
+  - os, if present
 - Compute:
   - mean runtime
   - runtime standard deviation
@@ -370,10 +400,10 @@ data/benchmark_syn/
 
 ## Questions
 
-- Which framework scales best as rows increase?
+- Which framework scales best on real data?
 - Is scaling close to linear?
 - Which workload becomes super-linear?
-- Does synthetic produce similar scaling trends to real data?
+- Which framework ranking is stable across 1M, 10M, and 50M?
 - Does Polars lazy execution provide consistent benefits?
 
 ## Output
@@ -386,15 +416,15 @@ data/benchmark_syn/
 
 ## Key Insight
 
-This notebook explains algorithmic and execution-model scalability under row growth.
+This notebook explains real-world algorithmic and execution-model scalability under row growth.
 
 ---
 
 ## 3.2 `03_physical_scaling.ipynb`
 
-## Track
+## Benchmark
 
-Track B — Physical Scaling
+Benchmark 2 — Physical Scaling by Dataset Size
 
 ## Purpose
 
@@ -475,68 +505,174 @@ This notebook explains system-level scalability, memory pressure, and out-of-cor
 
 ---
 
-## 3.3 `04_real_vs_synthetic_runtime.ipynb`
+## 3.3 `04_synthetic_stress.ipynb`
 
-## Track
+## Benchmark
 
-Track C — Real vs Synthetic Runtime Validation
+Benchmark 3 — Synthetic Stress Benchmark
 
 ## Purpose
 
-Validate whether synthetic data produces runtime behavior similar to real data.
+Evaluate framework behavior under synthetic stress scenarios that are difficult or impossible to reproduce with real data alone.
 
-This notebook justifies the use of synthetic data for larger-scale benchmark scenarios.
+This benchmark is not for validating synthetic data against real data. It is for stress testing framework robustness.
 
 ## Research Question
 
-Does synthetic data reflect real-world framework performance patterns?
+How do Pandas, Polars, and Dask behave under extreme synthetic conditions such as very large row count, heavy key skew, and high ID cardinality?
 
 ## Inputs
 
 ```text
 results/raw/
-data/benchmark_real/
 data/benchmark_syn/
+```
+
+## Scope
+
+| Scenario | Dataset | Purpose |
+|---|---|---|
+| Real-like large scale | Synthetic 100M rows, structure similar to real | Test large-scale row processing |
+| Heavy skew | Synthetic 10M rows with severe skewness | Test hot-key/groupby/join sensitivity |
+| High unique ID | Synthetic 10M rows with many unique IDs | Test cardinality pressure and memory overhead |
+
+| Parameter | Value |
+|---|---|
+| Dataset Type | Synthetic only |
+| Frameworks | Pandas, Polars, Dask |
+| Workloads | Filter, GroupBy, Join, Pipeline |
+| Primary Variable | Stress condition |
+
+## Analysis
+
+- Load synthetic stress benchmark results.
+- Filter `status == "ok"` for successful-run analysis.
+- Analyze failed runs separately.
+- Aggregate repeated runs by:
+  - stress_scenario
+  - framework
+  - workload
+- Compare:
+  - runtime
+  - peak memory
+  - failure rate
+  - throughput
+  - slowdown relative to real-like 10M or baseline synthetic 10M, if available
+- Inspect workload-specific sensitivity:
+  - groupby under heavy skew
+  - join under high cardinality
+  - pipeline under combined pressure
+
+## Questions
+
+- Can each framework complete the 100M real-like synthetic benchmark?
+- Which framework is most sensitive to heavy skew?
+- Which framework is most affected by high unique ID cardinality?
+- Do failures occur because of memory, timeouts, shuffle cost, or unsupported execution patterns?
+- Are framework rankings stable under stress, or do they change?
+
+## Output
+
+- Stress scenario summary table.
+- Runtime and memory plots by scenario.
+- Failure table.
+- Framework robustness ranking.
+- Workload-specific stress interpretation.
+
+## Key Insight
+
+This notebook identifies failure modes and robustness limits that are not visible in normal real-data scaling.
+
+---
+
+## 3.4 `05_real_os_comparison.ipynb`
+
+## Benchmark
+
+Benchmark 4 — Real Data OS Comparison: Windows vs Linux
+
+## Purpose
+
+Compare real-data benchmark results between Windows and Linux.
+
+This notebook checks environment sensitivity and reproducibility. It should not be mixed into the main real row scaling conclusions unless OS is explicitly treated as a factor.
+
+## Research Question
+
+Are real-data benchmark trends stable across Windows and Linux?
+
+## Inputs
+
+```text
+results/raw/windows/
+results/raw/linux/
+data/benchmark_real/
 ```
 
 ## Scope
 
 | Parameter | Value |
 |---|---|
-| Rows | Fixed representative size, e.g. 10M |
-| Data Types | Real vs Synthetic |
+| Dataset Type | Real only |
+| Row Counts | 1M, 10M, 50M |
+| Operating Systems | Windows, Linux |
 | Frameworks | Pandas, Polars, Dask |
 | Workloads | Filter, GroupBy, Join, Pipeline |
-| Primary Variable | Data type |
+| Primary Variable | Operating system |
+
+## Design Rule
+
+Windows and Linux runs should use:
+
+- the same real datasets
+- the same benchmark scripts
+- the same framework versions when possible
+- the same number of repeated runs
+- the same hardware if possible
+
+If Windows and Linux are run on the same physical machine, this can be treated as an OS comparison.
+
+If Windows and Linux are run on different machines, report it as an environment comparison rather than a pure OS comparison.
 
 ## Analysis
 
-- Select one fixed row count.
-- Compare real vs synthetic runtime by workload and framework.
-- Compare framework ranking:
-  - fastest
-  - slowest
-  - relative speedup
-- Compare memory usage.
-- Check whether synthetic preserves performance ordering.
+- Load real-data benchmark results from Windows and Linux.
+- Filter `status == "ok"`.
+- Aggregate repeated runs by:
+  - os
+  - framework
+  - workload
+  - dataset_size
+- Compute:
+  - mean runtime
+  - runtime standard deviation
+  - mean memory usage
+  - OS runtime ratio: `windows_time / linux_time`
+  - OS memory ratio: `windows_memory / linux_memory`
+- Compare framework ranking per OS.
+- Compare workload sensitivity per OS.
+- Inspect failures separately.
 
 ## Questions
 
-- Does synthetic preserve the same framework ranking as real data?
-- Are runtime differences acceptable?
-- Which workloads are most sensitive to real vs synthetic differences?
-- Can synthetic data be trusted for physical scaling?
+- Are framework rankings stable across Windows and Linux?
+- Is Linux consistently faster, or only for certain workloads?
+- Which workloads are most OS-sensitive?
+- Does Dask show stronger OS sensitivity because of multiprocessing or scheduling behavior?
+- Are memory usage patterns similar across OS environments?
 
 ## Output
 
-- Real vs synthetic runtime comparison.
+- Windows vs Linux runtime comparison.
+- OS runtime ratio table.
+- OS memory ratio table.
 - Ranking consistency table.
-- Memory comparison.
-- Workload sensitivity notes.
+- Failure comparison.
+- Reproducibility notes.
 
 ## Key Insight
 
-Synthetic data is valid for benchmark extension if it preserves framework ranking and workload behavior sufficiently well.
+This notebook verifies whether the real-data conclusions are portable across operating systems.
 
 ---
 
@@ -544,7 +680,7 @@ Synthetic data is valid for benchmark extension if it preserves framework rankin
 
 ---
 
-## 4.1 `05_workload_breakdown.ipynb`
+## 4.1 `06_workload_breakdown.ipynb`
 
 ## Purpose
 
@@ -564,8 +700,13 @@ results/raw/
 
 ## Scope
 
-Use accepted results from Track A primarily.  
-Optionally reference Track B stress results.
+Use accepted results from Benchmark 1 primarily.
+
+Optionally reference:
+
+- Benchmark 2 for memory pressure behavior
+- Benchmark 3 for stress behavior
+- Benchmark 4 for OS sensitivity
 
 ## Analysis
 
@@ -585,6 +726,7 @@ Analyze:
 - memory usage by workload
 - framework ranking by workload
 - workload sensitivity to dataset size
+- workload sensitivity to skew/cardinality stress, if relevant
 
 ## Questions
 
@@ -593,6 +735,7 @@ Analyze:
 - Which framework is best for scan-heavy workloads?
 - Which framework is best for aggregation-heavy workloads?
 - Which workload exposes memory bottlenecks?
+- Which workload is most sensitive to OS differences?
 
 ## Output
 
@@ -607,7 +750,7 @@ This notebook translates raw benchmark results into workload-level interpretatio
 
 ---
 
-## 4.2 `06_lazy_vs_eager_polars.ipynb`
+## 4.2 `07_lazy_vs_eager_polars.ipynb`
 
 ## Purpose
 
@@ -643,6 +786,8 @@ pipeline
 
 where results are available.
 
+Use Benchmark 1 as the primary source. Optionally inspect Benchmark 2 and Benchmark 3 if lazy/streaming results exist there.
+
 ## Analysis
 
 - Filter Polars lazy/eager results.
@@ -655,6 +800,7 @@ speedup = eager_time / lazy_time
 
 - Compare by workload and dataset size.
 - Identify workloads where optimization matters most.
+- Optionally compare lazy/eager behavior across Windows and Linux if both are available.
 
 ## Questions
 
@@ -662,6 +808,7 @@ speedup = eager_time / lazy_time
 - Which workload benefits most from lazy query optimization?
 - Does lazy execution reduce memory pressure?
 - Are there cases where eager is comparable or faster?
+- Is lazy-vs-eager behavior stable across OS?
 
 ## Output
 
@@ -686,8 +833,7 @@ Lazy execution matters most when query optimization, projection pushdown, predic
 
 Synthesize all findings into a coherent final report.
 
-This notebook should not introduce new experiments.  
-It should summarize and explain results from previous notebooks.
+This notebook should not introduce new experiments. It should summarize and explain results from previous notebooks.
 
 ## Structure
 
@@ -707,10 +853,11 @@ It should summarize and explain results from previous notebooks.
 ### 3. Methodology
 
 - Benchmark design.
-- Three-track structure:
-  - Logical Scaling
-  - Physical Scaling
-  - Real vs Synthetic Runtime Validation
+- Four-benchmark structure:
+  - Real Data Row Scaling
+  - Physical Scaling by Dataset Size
+  - Synthetic Stress Benchmark
+  - Real Data OS Comparison: Windows vs Linux
 - Workloads:
   - Filter
   - GroupBy
@@ -722,10 +869,11 @@ It should summarize and explain results from previous notebooks.
   - memory
   - speedup
   - failure behavior
+  - OS runtime ratio
 
-### 4. Results — Logical Scaling
+### 4. Results — Real Data Row Scaling
 
-Summarize `02_logical_scaling.ipynb`.
+Summarize `02_real_row_scaling.ipynb`.
 
 Discuss:
 
@@ -745,22 +893,42 @@ Discuss:
 - failure patterns
 - out-of-core capability
 
-### 6. Validation — Real vs Synthetic
+### 6. Results — Synthetic Stress Benchmark
 
-Summarize:
+Summarize `04_synthetic_stress.ipynb`.
 
-- `01c_validate_synthetic.ipynb`
-- `04_real_vs_synthetic_runtime.ipynb`
+Discuss:
+
+- 100M real-like synthetic scalability
+- 10M heavy skew behavior
+- 10M high unique ID behavior
+- robustness and failure modes
+
+### 7. Validation — Synthetic Data Quality
+
+Summarize `01c_validate_synthetic.ipynb`.
 
 Discuss:
 
 - data distribution similarity
-- runtime behavior similarity
 - limitations of synthetic data
+- whether synthetic is acceptable for physical and stress benchmarks
 
-### 7. Workload Discussion
+### 8. Results — Windows vs Linux Real Data Comparison
 
-Summarize `05_workload_breakdown.ipynb`.
+Summarize `05_real_os_comparison.ipynb`.
+
+Discuss:
+
+- runtime ratio
+- memory ratio
+- ranking consistency
+- OS-specific limitations
+- whether real-data conclusions are reproducible across OS
+
+### 9. Workload Discussion
+
+Summarize `06_workload_breakdown.ipynb`.
 
 Discuss:
 
@@ -769,9 +937,9 @@ Discuss:
 - join-heavy workloads
 - pipeline amplification
 
-### 8. Polars Lazy vs Eager
+### 10. Polars Lazy vs Eager
 
-Summarize `06_lazy_vs_eager_polars.ipynb`.
+Summarize `07_lazy_vs_eager_polars.ipynb`.
 
 Discuss:
 
@@ -779,24 +947,26 @@ Discuss:
 - when eager is sufficient
 - practical recommendation
 
-### 9. Limitations
+### 11. Limitations
 
 Discuss:
 
 - single-machine environment
-- 16 GB RAM constraint
+- RAM constraint
+- OS/hardware differences if Windows and Linux are not run on the same machine
 - synthetic data approximation
 - dataset-specific conclusions
 - framework configuration sensitivity
 
-### 10. Conclusion
+### 12. Conclusion
 
 Final takeaways:
 
 - Pandas is suitable for small-scale workloads and simple analysis.
 - Polars is strong for high-performance single-machine analytics.
 - Dask is useful for larger-than-memory and partitioned workloads, but overhead matters.
-- Synthetic data is valid only after distribution and runtime validation.
+- Synthetic stress benchmarks reveal robustness limits not visible in normal real-data scaling.
+- Windows vs Linux comparison helps validate reproducibility and deployment sensitivity.
 
 ---
 
@@ -813,13 +983,14 @@ notebooks/
 │   └── 01c_validate_synthetic.ipynb
 │
 ├── benchmarks/
-│   ├── 02_logical_scaling.ipynb
+│   ├── 02_real_row_scaling.ipynb
 │   ├── 03_physical_scaling.ipynb
-│   └── 04_real_vs_synthetic_runtime.ipynb
+│   ├── 04_synthetic_stress.ipynb
+│   └── 05_real_os_comparison.ipynb
 │
 ├── analysis/
-│   ├── 05_workload_breakdown.ipynb
-│   └── 06_lazy_vs_eager_polars.ipynb
+│   ├── 06_workload_breakdown.ipynb
+│   └── 07_lazy_vs_eager_polars.ipynb
 │
 └── report/
     └── 09_final_report.ipynb
@@ -831,8 +1002,7 @@ notebooks/
 
 Each notebook must answer one clear research question.
 
-Notebooks are not for running benchmarks.  
-They are for reasoning over benchmark results.
+Notebooks are not for running benchmarks. They are for reasoning over benchmark results.
 
 The project should avoid asking:
 
