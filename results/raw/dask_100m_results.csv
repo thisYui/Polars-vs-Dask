@@ -1,0 +1,7 @@
+timestamp,framework,workload,dataset_size,n_rows,run_index,time_s,peak_memory_mb,throughput_rows_per_s,status,notes
+2026-05-09T20:07:27,dask,filter,100M,100000000,1,109.202,11697.36,915734,ok,partition_size=128MB
+2026-05-09T20:09:20,dask,filter,100M,100000000,2,111.928,10817.42,893431,ok,partition_size=128MB
+2026-05-09T20:11:15,dask,filter,100M,100000000,3,114.6295,11884.82,872375,ok,partition_size=128MB
+2026-05-09T20:11:49,dask,groupby,100M,100000000,1,16.8061,6599.91,5950221,ok,partition_size=128MB
+2026-05-09T20:12:06,dask,groupby,100M,100000000,2,17.2308,6112.52,5803551,ok,partition_size=128MB
+2026-05-09T20:12:24,dask,groupby,100M,100000000,3,17.4469,6098.71,5731678,ok,partition_size=128MB

@@ -85,7 +85,13 @@ Usage:
     python run_pipeline.py --steps benchmark_polars_eager --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
     python run_pipeline.py --steps benchmark_dask --sizes 5GB 10GB 20GB --data-type syn --partition --verbose
     
-    python run_pipeline.py --steps benchmark_pandas benchmark_polars benchmark_dask --sizes 10M_skewed 10M_highuid 100M --data-type syn --verbose  
+    python run_pipeline.py --steps  benchmark_polars --sizes 10M_skewed 10M_highuid --data-type syn --verbose  
+    python run_pipeline.py --steps  benchmark_polars --sizes 10M_skewed 10M_highuid --data-type syn --verbose  
+    python run_pipeline.py --steps  benchmark_polars_eager benchmark_dask --sizes 10M_skewed 10M_highuid --data-type syn --verbose 
+    python run_pipeline.py --steps  benchmark_dask --sizes 10M_skewed 10M_highuid --data-type syn --verbose
+
+    python run_pipeline.py --steps benchmark_dask --sizes 100M --data-type syn --workloads filter groupby --verbose
+    python run_pipeline.py --steps benchmark_polars --sizes 100M --data-type syn --workloads filter groupby --verbose
 """
 
 import argparse
@@ -179,6 +185,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
     raw_format_flag = args.raw_format
     benchmark_extra = ["--generate-data"] if args.generate_data else []
     data_type_flag  = getattr(args, "data_type", "real")
+    workloads_flag  = getattr(args, "workloads", None)
 
     preprocess_extra = ["--partition"] if args.partition else []
     split_extra      = ["--partition"] if args.partition else []
@@ -420,7 +427,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--sizes",     *sizes_flag,
                 "--data-type", data_type_flag,
                 "--output",    f"pandas_{_result_suffix}_results.csv",
-            ],
+            ] + (["--workloads"] + workloads_flag if workloads_flag else []),
         },
         {
             "name":        "benchmark_polars",
@@ -432,7 +439,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--data-type", data_type_flag,
                 "--mode",      "lazy",
                 "--output",    f"polars_{_result_suffix}_results.csv",
-            ],
+            ] + (["--workloads"] + workloads_flag if workloads_flag else []),
         },
         {
             "name":        "benchmark_polars_eager",
@@ -444,7 +451,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--data-type", data_type_flag,
                 "--mode",      "eager",
                 "--output",    f"polars_eager_{_result_suffix}_results.csv",
-            ],
+            ] + (["--workloads"] + workloads_flag if workloads_flag else []),
         },
         {
             "name":        "benchmark_dask",
@@ -457,7 +464,7 @@ def build_steps(args: argparse.Namespace) -> list[dict]:
                 "--workers",      str(args.dask_workers),
                 "--memory-limit", args.dask_memory,
                 "--output",       f"dask_{_result_suffix}_results.csv",
-            ],
+            ] + (["--workloads"] + workloads_flag if workloads_flag else []),
         },
     ]
 
@@ -638,6 +645,9 @@ def main() -> None:
     bench_grp.add_argument("--frameworks", nargs="+",
         default=["pandas", "polars_lazy", "dask"],
         choices=["pandas", "polars_lazy", "polars_eager", "dask"])
+    bench_grp.add_argument("--workloads", nargs="+", default=None,
+        metavar="WORKLOAD",
+        help="Giới hạn workload chạy (vd: filter groupby). Mặc định chạy tất cả.")
     bench_grp.add_argument("--dask-workers",  type=int, default=2)
     bench_grp.add_argument("--dask-memory",   default="4GB")
     bench_grp.add_argument("--generate-data", action="store_true")

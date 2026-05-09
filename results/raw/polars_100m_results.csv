@@ -1,0 +1,7 @@
+timestamp,framework,workload,dataset_size,n_rows,run_index,time_s,peak_memory_mb,throughput_rows_per_s,status,notes
+2026-05-09T19:33:53,polars_lazy,filter,100M,100000000,1,79.1968,12083.11,1262677,ok,
+2026-05-09T19:35:14,polars_lazy,filter,100M,100000000,2,80.7636,12204.66,1238182,ok,
+2026-05-09T19:36:37,polars_lazy,filter,100M,100000000,3,83.3054,12064.61,1200403,ok,
+2026-05-09T19:37:06,polars_lazy,groupby,100M,100000000,1,13.1265,3687.37,7618167,ok,
+2026-05-09T19:37:18,polars_lazy,groupby,100M,100000000,2,12.3753,3285.98,8080601,ok,
+2026-05-09T19:37:31,polars_lazy,groupby,100M,100000000,3,12.4835,3647.1,8010583,ok,
