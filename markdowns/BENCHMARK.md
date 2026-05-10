@@ -457,9 +457,9 @@ Synthetic stress tests answer questions such as:
 
 | Test Case | Dataset Size | Synthetic Structure | Purpose |
 |---|---:|---|---|
-| Stress Scale | 100M rows | Same schema and broad structure as real data | Test large-scale processing beyond available real-data scale |
-| Heavy Skewness | 10M rows | Strongly skewed key distribution | Test GroupBy, Join, partitioning, and hot-key behavior |
-| High Unique IDs | 10M rows | Many unique IDs / high cardinality | Test memory pressure, hash-table size, join cost, and cardinality-sensitive operations |
+| Stress Scale | 100M rows | Same schema and broad structure as real data | Test large-scale processing beyond available real-data scale (only Dask and Polars Lazy) |
+| Heavy Skewness | 10M rows | Strongly skewed key distribution | Test GroupBy, Join, partitioning, and hot-key behavior (Pandas, Polars Eager, Polar Lazy, Dask) |
+| High Unique IDs | 10M rows | Many unique IDs / high cardinality | Test memory pressure, hash-table size, join cost, and cardinality-sensitive operations  (Pandas, Polars Eager, Polar Lazy, Dask) |
 
 ---
 
@@ -474,21 +474,6 @@ Synthetic stress tests answer questions such as:
 | Physical size | Recorded, not controlled unless required by test case |
 | Output mode | Materialized result or controlled output depending on stress goal |
 
----
-
-## Total Runs
-
-For each workload:
-
-```text
-3 synthetic cases x 3 frameworks = 9 runs
-```
-
-For all four workloads:
-
-```text
-9 runs x 4 workloads = 36 runs
-```
 
 ---
 

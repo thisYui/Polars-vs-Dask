@@ -68,7 +68,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import numpy as np
 import pandas as pd
@@ -127,8 +127,8 @@ ID_POOL_REUSE_PROB = CONFIG_ID_POOL_REUSE_PROB
 class BenchmarkTier(str, Enum):
     TIER1            = "tier1"           # Optimised synthetic: categorical + heavy ID reuse → best-case
     TIER2            = "tier2"           # Realistic synthetic: calibrated from real data → mid-case (10M / 100M)
-    TIER2_SKEWED     = "tier2_skewed"    # [NEW] Skewed IDs: Zipf alpha=2.0, hot-key pressure (10M)
-    TIER2_HIGH_UNIQUE= "tier2_high_unique"  # [NEW] High unique IDs: low reuse (~80% unique) (10M)
+    TIER2_SKEWED     = "tier2_skewed"    # [NEW] Skewed IDs: Zipf alpha=3.0, hot-key pressure (10M)
+    TIER2_HIGH_UNIQUE= "tier2_high_unique"  # [NEW] High unique user_id: ~50% unique at 10M
     TIER3            = "tier3"           # Real dataset passthrough (no generation, just normalisation)
 
 
@@ -279,6 +279,19 @@ class _IDPools:
             idx = rng.integers(0, len(_PRODUCT_ID_CHARS), size=(n_products, _PRODUCT_ID_LEN))
             cls._product_pool = ["B" + "".join(row) for row in _PRODUCT_ID_CHARS[idx]]
         return cls._product_pool
+
+
+def _build_dynamic_user_pool(n_users: int, seed: int = 0, batch_size: int = 500_000) -> list[str]:
+    """Build a reproducible Amazon-like user_id pool at the requested cardinality."""
+    rng = np.random.default_rng(seed)
+    users: list[str] = []
+
+    for start in range(0, n_users, batch_size):
+        n_batch = min(batch_size, n_users - start)
+        idx = rng.integers(0, len(_USER_ID_CHARS), size=(n_batch, _USER_ID_LEN))
+        users.extend("".join(row) for row in _USER_ID_CHARS[idx])
+
+    return users
 
 
 _ZIPF_WEIGHT_CACHE: dict[tuple[int, float], np.ndarray] = {}
@@ -802,7 +815,14 @@ class SyntheticReviewGenerator:
         elif tier == BenchmarkTier.TIER2_HIGH_UNIQUE:
             # Hướng 3: ~50% unique users (reuse_prob=0.50 → unique_prob=0.50)
             # parent_asin giữ nguyên TIER2 (full cardinality)
-            self._target_unique_users = min(N_USERS, max(1, round(n_rows * (1.0 - self.cfg.id_pool_reuse_prob))))
+            desired_unique_users = max(1, round(n_rows * 0.50))
+            if N_USERS < desired_unique_users:
+                logger.info(
+                    "Expanding high-unique user pool from "
+                    f"{N_USERS:,} to {desired_unique_users:,} IDs"
+                )
+                self._users = _build_dynamic_user_pool(desired_unique_users)
+            self._target_unique_users = min(len(self._users), desired_unique_users)
             self._target_unique_parent_asins = min(N_PRODUCTS, n_rows)  # TIER2-style
         elif tier == BenchmarkTier.TIER2_SKEWED:
             # Hướng 2: user cardinality TIER2-style (full), parent_asin TIER2-style (full)
@@ -1260,9 +1280,9 @@ if __name__ == "__main__":
         default=BenchmarkTier.TIER2.value,
         help=(
             "tier1=optimised (high reuse), "
-            "tier2=realistic/real-like (default, dùng cho 100M), "
-            "tier2_skewed=hot-key skew Zipf α=2.0 (10M), "
-            "tier2_high_unique=~80%% unique IDs (10M)"
+            "tier2=realistic/real-like (default, for 100M), "
+            "tier2_skewed=hot-key skew Zipf alpha=3.0 (10M), "
+            "tier2_high_unique=~50%% unique user_id at 10M rows"
         ),
     )
     parser.add_argument(
@@ -1288,7 +1308,7 @@ if __name__ == "__main__":
         help=(
             "Custom output label for the generated file, e.g. '10M_skewed'. "
             "Row count is inferred from the base label (strip suffix). "
-            "Used by run_pipeline for Hướng 2 & 3 so files don't overwrite each other."
+            "Used by run_pipeline for directions 2 and 3 so files don't overwrite each other."
         ),
     )
     parser.add_argument(

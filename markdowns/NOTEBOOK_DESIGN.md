@@ -532,9 +532,9 @@ data/benchmark_syn/
 
 | Scenario | Dataset | Purpose |
 |---|---|---|
-| Real-like large scale | Synthetic 100M rows, structure similar to real | Test large-scale row processing |
-| Heavy skew | Synthetic 10M rows with severe skewness | Test hot-key/groupby/join sensitivity |
-| High unique ID | Synthetic 10M rows with many unique IDs | Test cardinality pressure and memory overhead |
+| Real-like large scale | Synthetic 100M rows, structure similar to real | Test large-scale row processing (only Dask and Polars Lazy and only fitering and groupby not include join and pipeline) |
+| Heavy skew | Synthetic 10M rows with severe skewness | Test hot-key/groupby/join sensitivity (Pandas, Polars Eager, Polar Lazy, Dask) |
+| High unique ID | Synthetic 10M rows with many unique IDs | Test cardinality pressure and memory overhead (Pandas, Polars Eager, Polar Lazy, Dask) |
 
 | Parameter | Value |
 |---|---|
