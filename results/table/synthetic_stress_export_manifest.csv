@@ -1,0 +1,18 @@
+file,rows,columns,path
+synthetic_stress_100m_summary.csv,4,17,D:\Polar vs Dask\results\table\synthetic_stress_100m_summary.csv
+synthetic_stress_100m_vs_real_50m.csv,4,21,D:\Polar vs Dask\results\table\synthetic_stress_100m_vs_real_50m.csv
+synthetic_stress_10m_summary.csv,32,17,D:\Polar vs Dask\results\table\synthetic_stress_10m_summary.csv
+synthetic_stress_comparison_boundary.csv,6,3,D:\Polar vs Dask\results\table\synthetic_stress_comparison_boundary.csv
+synthetic_stress_completion_matrix.csv,10,6,D:\Polar vs Dask\results\table\synthetic_stress_completion_matrix.csv
+synthetic_stress_failure_taxonomy.csv,4,8,D:\Polar vs Dask\results\table\synthetic_stress_failure_taxonomy.csv
+synthetic_stress_missing_baseline.csv,0,5,D:\Polar vs Dask\results\table\synthetic_stress_missing_baseline.csv
+synthetic_stress_observed_scope.csv,3,4,D:\Polar vs Dask\results\table\synthetic_stress_observed_scope.csv
+synthetic_stress_omitted_100m.csv,4,6,D:\Polar vs Dask\results\table\synthetic_stress_omitted_100m.csv
+synthetic_stress_polars_lazy_vs_eager.csv,8,8,D:\Polar vs Dask\results\table\synthetic_stress_polars_lazy_vs_eager.csv
+synthetic_stress_ratio_rank.csv,32,23,D:\Polar vs Dask\results\table\synthetic_stress_ratio_rank.csv
+synthetic_stress_report_ready_summary.csv,5,4,D:\Polar vs Dask\results\table\synthetic_stress_report_ready_summary.csv
+synthetic_stress_run_count.csv,84,6,D:\Polar vs Dask\results\table\synthetic_stress_run_count.csv
+synthetic_stress_scale_compare_real_plus_100m.csv,16,18,D:\Polar vs Dask\results\table\synthetic_stress_scale_compare_real_plus_100m.csv
+synthetic_stress_summary.csv,84,17,D:\Polar vs Dask\results\table\synthetic_stress_summary.csv
+synthetic_stress_validation_requirements.csv,8,2,D:\Polar vs Dask\results\table\synthetic_stress_validation_requirements.csv
+synthetic_stress_vs_real_10m.csv,32,22,D:\Polar vs Dask\results\table\synthetic_stress_vs_real_10m.csv

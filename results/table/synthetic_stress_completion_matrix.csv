@@ -1,0 +1,11 @@
+dataset_size,framework,filter,groupby,join,pipeline
+100M,polars_lazy,3.0,3.0,0.0,0.0
+100M,dask,3.0,3.0,0.0,0.0
+10M_highuid,pandas,3.0,3.0,3.0,3.0
+10M_highuid,polars_eager,3.0,3.0,3.0,3.0
+10M_highuid,polars_lazy,3.0,3.0,3.0,3.0
+10M_highuid,dask,3.0,3.0,3.0,3.0
+10M_skewed,pandas,3.0,3.0,3.0,3.0
+10M_skewed,polars_eager,3.0,3.0,3.0,3.0
+10M_skewed,polars_lazy,3.0,3.0,3.0,3.0
+10M_skewed,dask,3.0,3.0,3.0,3.0

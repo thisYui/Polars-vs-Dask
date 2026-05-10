@@ -1,0 +1,5 @@
+stress_scenario,framework,workload,scope_status,failure_class,reason,n_runs,taxonomy_type
+100M_real_like,pandas,filter/groupby/join/pipeline,omitted_by_design,practical_memory_envelope,Pandas 100M was excluded because it is outside the practical memory envelope of the current benchmark environment.,,scope_or_aborted_note
+100M_real_like,polars_eager,filter/groupby/join/pipeline,attempted_aborted,system_shutdown,Polars eager 100M was attempted and caused the machine to shut down; it is excluded from the reportable 100M matrix.,,scope_or_aborted_note
+100M_real_like,polars_lazy/dask,join,attempted_aborted,system_shutdown,100M join materialization/intermediate size was too large and caused shutdown.,,scope_or_aborted_note
+100M_real_like,polars_lazy/dask,pipeline,omitted_by_design,out_of_scope_due_to_join_pressure,Pipeline is excluded from 100M stress interpretation because join-like intermediate pressure is too risky for this environment.,,scope_or_aborted_note

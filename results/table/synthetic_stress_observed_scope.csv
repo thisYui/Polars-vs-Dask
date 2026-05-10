@@ -1,0 +1,4 @@
+scenario,valid_frameworks,valid_workloads,interpretation
+100M_real_like,"polars_lazy, dask","filter, groupby",Large-row stress probe only.
+10M_skewed,"pandas, polars_eager, polars_lazy, dask","filter, groupby, join, pipeline",Compare skew sensitivity within each framework and workload.
+10M_highuid,"pandas, polars_eager, polars_lazy, dask","filter, groupby, join, pipeline",Compare cardinality pressure within each framework and workload.

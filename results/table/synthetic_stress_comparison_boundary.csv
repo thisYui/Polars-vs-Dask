@@ -1,0 +1,7 @@
+comparison,validity,reason
+10M_skewed vs real_10M,valid,"Same framework, same workload, same 10M row-count baseline; measures skew sensitivity."
+10M_highuid vs real_10M,valid,"Same framework, same workload, same 10M row-count baseline; measures high-cardinality sensitivity."
+Polars lazy vs Dask at 100M filter/groupby,valid,This is the reportable scope of the 100M stress-scale probe.
+100M synthetic vs real 50M as a scaling law,invalid,Different dataset source and physical footprint; use only as a visual reference marker.
+Pandas is worse at 100M,invalid,"Pandas 100M was excluded, not successfully benchmarked."
+Infer 100M join/pipeline behavior from filter/groupby,invalid,Join and pipeline have different intermediate/output pressure and are outside the safe 100M scope.

@@ -1,0 +1,17 @@
+file,rows,columns,path
+physical_scaling_failures.csv,0,6,D:\Polar vs Dask\results\table\physical_scaling_failures.csv
+physical_scaling_memory_efficiency.csv,48,6,D:\Polar vs Dask\results\table\physical_scaling_memory_efficiency.csv
+physical_scaling_memory_growth_pivot.csv,16,5,D:\Polar vs Dask\results\table\physical_scaling_memory_growth_pivot.csv
+physical_scaling_memory_ranking.csv,48,6,D:\Polar vs Dask\results\table\physical_scaling_memory_ranking.csv
+physical_scaling_memory_ratio_vs_pandas_pivot.csv,12,6,D:\Polar vs Dask\results\table\physical_scaling_memory_ratio_vs_pandas_pivot.csv
+physical_scaling_over_ram_failures.csv,0,13,D:\Polar vs Dask\results\table\physical_scaling_over_ram_failures.csv
+physical_scaling_pareto_summary.csv,22,19,D:\Polar vs Dask\results\table\physical_scaling_pareto_summary.csv
+physical_scaling_runtime_ranking.csv,48,6,D:\Polar vs Dask\results\table\physical_scaling_runtime_ranking.csv
+physical_scaling_runtime_slowdown_pivot.csv,16,5,D:\Polar vs Dask\results\table\physical_scaling_runtime_slowdown_pivot.csv
+physical_scaling_slopes.csv,16,7,D:\Polar vs Dask\results\table\physical_scaling_slopes.csv
+physical_scaling_slowdown_vs_baseline.csv,48,22,D:\Polar vs Dask\results\table\physical_scaling_slowdown_vs_baseline.csv
+physical_scaling_speedup_vs_pandas.csv,48,22,D:\Polar vs Dask\results\table\physical_scaling_speedup_vs_pandas.csv
+physical_scaling_speedup_vs_pandas_pivot.csv,12,6,D:\Polar vs Dask\results\table\physical_scaling_speedup_vs_pandas_pivot.csv
+physical_scaling_stability.csv,48,11,D:\Polar vs Dask\results\table\physical_scaling_stability.csv
+physical_scaling_stability_flags.csv,4,11,D:\Polar vs Dask\results\table\physical_scaling_stability_flags.csv
+physical_scaling_summary.csv,48,18,D:\Polar vs Dask\results\table\physical_scaling_summary.csv

@@ -1,0 +1,9 @@
+requirement,reason
+schema compatibility,Stress results must use comparable columns and dtypes.
+row count,Scenario labels such as 10M and 100M must match generated data.
+key cardinality,High-cardinality stress must be intentional and measured.
+key skew / frequency behavior,Heavy-skew stress must show stronger skew than baseline data.
+text length distribution,String memory footprint affects runtime and peak RSS.
+rating distribution,Filter selectivity depends on value distribution.
+null ratio,Null handling can affect physical and execution behavior.
+memory footprint,Stress interpretation depends on practical memory pressure.
