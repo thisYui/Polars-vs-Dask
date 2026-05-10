@@ -754,72 +754,149 @@ This notebook translates raw benchmark results into workload-level interpretatio
 
 ## Purpose
 
-Analyze whether Polars lazy execution improves performance over eager execution.
+Analyze whether Polars lazy execution improves performance or memory behavior over eager execution.
 
-## Research Question
+## Research Questions
 
-When does lazy execution help Polars, and how large is the benefit?
+1. Is Polars Lazy consistently faster than Polars Eager?
+2. Which workloads benefit most from lazy execution?
+3. Does lazy execution reduce peak memory?
+4. Are there cases where Eager is faster or uses less memory?
+5. Does lazy-vs-eager behavior change as dataset size increases?
+6. What is the practical recommendation for choosing Lazy vs Eager?
 
 ## Inputs
 
+Main analysis:
+
 ```text
-results/raw/
+results/raw/polars_real_results.csv
+results/raw/polars_eager_real_results.csv
 ```
+
+Supporting analysis:
+
+```text
+results/raw/polars_size_results.csv
+results/raw/polars_eager_size_results.csv
+results/raw/polars_highuid_skewed_results.csv
+results/raw/polars_eager_highuid_skewed_results.csv
+results/raw/polars_colab_results.csv
+results/raw/polars_eager_colab_results.csv
+```
+
+## Analysis Boundary
+
+Main lazy-vs-eager conclusions are based on real-data row-scaling results only.
+
+Physical scaling, synthetic stress, and Colab results are used only as supporting evidence. These groups should not be mixed into the main lazy-vs-eager ranking because they control different primary variables.
 
 ## Scope
 
-Compare:
+| Parameter | Value |
+|---|---|
+| Dataset type | Real data |
+| Frameworks | Polars Lazy, Polars Eager |
+| Workloads | Filter, GroupBy, Join, Pipeline |
+| Dataset sizes | 1M, 10M, 50M |
+| Status | ok only |
 
-```text
-polars_lazy
-polars_eager
-```
+## Main Metrics
 
-Across:
-
-```text
-filter
-groupby
-join
-pipeline
-```
-
-where results are available.
-
-Use Benchmark 1 as the primary source. Optionally inspect Benchmark 2 and Benchmark 3 if lazy/streaming results exist there.
+- mean runtime
+- runtime standard deviation
+- mean peak memory
+- memory standard deviation
+- mean throughput
+- number of successful runs
+- lazy speedup
+- lazy memory ratio
+- dataset-size sensitivity
 
 ## Analysis
 
-- Filter Polars lazy/eager results.
-- Aggregate repeated runs.
-- Compute speedup:
+1. Load Polars Lazy and Eager result files.
+2. Validate required columns and result-file inventory.
+3. Filter `status == "ok"` for main analysis.
+4. Check completeness for:
+   - framework group
+   - workload
+   - dataset size
+   - status
+5. Aggregate repeated runs by:
+   - workload
+   - dataset size
+   - framework group
+6. Compare absolute runtime and memory.
+7. Compute lazy speedup:
 
 ```text
-speedup = eager_time / lazy_time
+lazy_speedup = eager_runtime / lazy_runtime
 ```
 
-- Compare by workload and dataset size.
-- Identify workloads where optimization matters most.
-- Optionally compare lazy/eager behavior across Windows and Linux if both are available.
+Interpretation:
 
-## Questions
+- `lazy_speedup > 1.0` means Lazy is faster.
+- `lazy_speedup < 1.0` means Eager is faster.
 
-- Is lazy consistently faster?
-- Which workload benefits most from lazy query optimization?
-- Does lazy execution reduce memory pressure?
-- Are there cases where eager is comparable or faster?
-- Is lazy-vs-eager behavior stable across OS?
+8. Compute lazy memory ratio:
+
+```text
+lazy_memory_ratio = lazy_memory / eager_memory
+```
+
+Interpretation:
+
+- `lazy_memory_ratio < 1.0` means Lazy uses less peak memory.
+- `lazy_memory_ratio > 1.0` means Lazy uses more peak memory.
+
+9. Analyze dataset-size sensitivity from `1M` to `50M`:
+
+```text
+runtime_growth_50M_vs_1M
+memory_growth_50M_vs_1M
+speedup_change_50M_minus_1M
+```
+
+10. Interpret results by workload:
+    - Filter: predicate/projection pushdown
+    - GroupBy: aggregation optimization
+    - Join: eager may be competitive
+    - Pipeline: query-plan optimization advantage
+11. Use size, stress, and Colab groups only as supporting evidence.
+12. Produce a practical recommendation table based on observed speedup and memory ratio.
+
+## Notebook Structure
+
+1. Research Questions
+2. Setup and Data Loading
+3. Result File Inventory and Analysis Boundary
+4. Analysis Scope
+5. Data Completeness and Validity Check
+6. Lazy vs Eager Summary Table
+7. Runtime Comparison: Lazy vs Eager
+8. Lazy Speedup over Eager
+9. Memory Comparison: Lazy vs Eager
+10. Dataset-Size Sensitivity
+11. Workload-Specific Interpretation
+12. Supporting Evidence: Size, Stress, and Colab
+13. Practical Recommendation: When to Use Lazy vs Eager
+14. Final Conclusion
 
 ## Output
 
 - Lazy vs eager runtime plots.
-- Speedup table.
+- Runtime vs dataset size plots by workload.
+- Speedup table by workload and dataset size.
+- Mean speedup table by workload.
+- Memory ratio table.
+- Dataset-size sensitivity table.
 - Workload-specific interpretation.
 - Recommendation on Polars execution mode.
 
 ## Key Insight
 
-Lazy execution matters most when query optimization, projection pushdown, predicate pushdown, or streaming can reduce work.
+Lazy execution matters most when query optimization, projection pushdown, predicate pushdown, or whole-plan optimization can reduce work or avoid unnecessary intermediate materialization. The notebook should still report cases where Eager is faster or uses less memory, because this is an end-to-end benchmark that includes scan/read, optimization overhead, memory allocation, and final materialization.
 
 ---
 

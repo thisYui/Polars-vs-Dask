@@ -1,0 +1,7 @@
+question,answer_from_results
+Is Lazy consistently faster?,No; see speedup_by_size for workload-size exceptions.
+Workload with strongest Lazy benefit,groupby
+Workloads where Eager is faster or similar,"filter, join"
+Does Lazy reduce memory pressure?,Mixed; see memory ratio tables.
+Does behavior change with dataset size?,Yes
+Recommendation source,Use recommendations table; it is computed from mean speedup and memory ratio.

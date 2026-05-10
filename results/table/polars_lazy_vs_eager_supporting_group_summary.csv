@@ -1,0 +1,13 @@
+support_group,workload,mean_lazy_speedup,runtime_reading,mean_lazy_memory_ratio,memory_reading,n_points
+colab_environment,filter,1.1557407124021735,Lazy faster,0.922874856167124,Lazy lower memory,2
+colab_environment,groupby,1.1893204191396705,Lazy faster,0.6712681317225967,Lazy lower memory,2
+colab_environment,join,0.8500832933940483,Eager faster,1.255511054395316,Eager lower memory,2
+colab_environment,pipeline,1.2116560774877283,Lazy faster,0.70495785914928,Lazy lower memory,2
+physical_scaling,filter,0.7218051472361123,Eager faster,0.8163985699490947,Lazy lower memory,3
+physical_scaling,groupby,1.7467843558453113,Lazy faster,0.49540385209409993,Lazy lower memory,3
+physical_scaling,join,0.3425950926553624,Eager faster,0.9733838693685074,Similar,3
+physical_scaling,pipeline,1.3126915566817627,Lazy faster,0.6109494210193308,Lazy lower memory,3
+synthetic_stress,filter,0.6539751736699531,Eager faster,0.8221303035975174,Lazy lower memory,2
+synthetic_stress,groupby,2.4354866287525025,Lazy faster,0.3913681338485172,Lazy lower memory,2
+synthetic_stress,join,0.2899577060798279,Eager faster,1.0353612347734589,Similar,2
+synthetic_stress,pipeline,0.7711066062008429,Eager faster,0.5126976654247225,Lazy lower memory,2

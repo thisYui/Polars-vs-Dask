@@ -1,0 +1,5 @@
+workload,mean_lazy_speedup,overall_faster_mode,mean_lazy_memory_ratio,overall_lower_memory_mode,recommended_mode,reason,memory_note
+filter,1.02910325019769,Similar,1.0793310996925716,Eager,Eager is enough,mean speedup=1.03x; memory ratio=1.08,Eager uses less peak memory on average.
+groupby,1.876511087751643,Lazy,1.3286124547167408,Eager,Lazy if runtime matters,mean speedup=1.88x; memory ratio=1.33,Eager uses less peak memory on average.
+join,0.3695350309943488,Eager,1.2408686397430455,Eager,Eager,mean speedup=0.37x; memory ratio=1.24,Eager uses less peak memory on average.
+pipeline,1.698374992922563,Lazy,1.2245284959863099,Eager,Lazy if runtime matters,mean speedup=1.70x; memory ratio=1.22,Eager uses less peak memory on average.

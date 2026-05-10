@@ -26,12 +26,13 @@ project_root/
 │       ├── benchmarks/
 │       │   ├── 02_logical_scaling.ipynb
 │       │   ├── 03_physical_scaling.ipynb
-│       │   └── 04_real_vs_synthetic_runtime.ipynb
+│       │   ├── 04_real_vs_synthetic_runtime.ipynb
+│       │   └── 05_real_env_comparison.ipynb
 │       ├── analysis/
-│       │   ├── 05_workload_breakdown.ipynb
-│       │   └── 06_lazy_vs_eager_polars.ipynb
+│       │   ├── 06_workload_breakdown.ipynb
+│       │   └── 07_lazy_vs_eager_polars.ipynb
 │       └── report/
-│           └── 09_final_report.ipynb
+│           └── 08_final_report.ipynb
 │
 ├── results/
 │   ├── plots/

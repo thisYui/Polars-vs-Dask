@@ -1,0 +1,9 @@
+analysis_group,framework_group,file,exists,role
+Main real row scaling,polars_lazy,polars_real_results.csv,True,Main analysis
+Main real row scaling,polars_eager,polars_eager_real_results.csv,True,Main analysis
+Physical scaling,polars_lazy,polars_size_results.csv,True,Supporting memory-pressure analysis
+Physical scaling,polars_eager,polars_eager_size_results.csv,True,Supporting memory-pressure analysis
+Synthetic stress,polars_lazy,polars_highuid_skewed_results.csv,True,Supporting skew/cardinality analysis
+Synthetic stress,polars_eager,polars_eager_highuid_skewed_results.csv,True,Supporting skew/cardinality analysis
+Colab environment,polars_lazy,polars_colab_results.csv,True,Supporting environment sensitivity
+Colab environment,polars_eager,polars_eager_colab_results.csv,True,Supporting environment sensitivity
